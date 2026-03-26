@@ -1,0 +1,33 @@
+name: Post Comment
+description: Issue または PR にコメントを投稿する
+
+inputs:
+  issue-number:
+    description: 'Issue または PR の番号'
+    required: true
+  body:
+    description: 'コメント本文'
+    required: true
+  token:
+    description: 'コメント投稿に使用するトークン（PAT または GITHUB_TOKEN）'
+    required: true
+  repository:
+    description: '対象リポジトリ（OWNER/REPO 形式）。省略時は現在のリポジトリ'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Post comment
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        COMMENT_BODY: ${{ inputs.body }}
+        TARGET_REPO: ${{ inputs.repository }}
+      shell: bash
+      run: |
+        repo="${TARGET_REPO:-$GITHUB_REPOSITORY}"
+        gh issue comment "$ISSUE_NUMBER" \
+          --repo "$repo" \
+          --body "$COMMENT_BODY"
