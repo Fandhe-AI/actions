@@ -1,0 +1,159 @@
+name: Project Sync
+description: Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する
+
+inputs:
+  project-number:
+    description: 'GitHub Project 番号'
+    required: true
+  project-owner:
+    description: 'プロジェクトオーナー（Organization or ユーザー）'
+    required: true
+  token:
+    description: 'project スコープ付き PAT または GitHub App トークン'
+    required: true
+  status-todo:
+    description: 'Todo に対応する Status オプション名'
+    default: 'Todo'
+  status-in-progress:
+    description: 'In Progress に対応する Status オプション名'
+    default: 'In Progress'
+  status-in-review:
+    description: 'In Review に対応する Status オプション名'
+    default: 'In Review'
+  status-done:
+    description: 'Done に対応する Status オプション名'
+    default: 'Done'
+
+runs:
+  using: composite
+  steps:
+    - name: Get project metadata
+      id: meta
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PROJECT_NUMBER: ${{ inputs.project-number }}
+        PROJECT_OWNER: ${{ inputs.project-owner }}
+        STATUS_TODO: ${{ inputs.status-todo }}
+        STATUS_IN_PROGRESS: ${{ inputs.status-in-progress }}
+        STATUS_IN_REVIEW: ${{ inputs.status-in-review }}
+        STATUS_DONE: ${{ inputs.status-done }}
+      run: |
+        PROJECT_ID=$(gh project view "$PROJECT_NUMBER" \
+          --owner "$PROJECT_OWNER" \
+          --format json -q '.id')
+        echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+
+        FIELDS=$(gh project field-list "$PROJECT_NUMBER" \
+          --owner "$PROJECT_OWNER" \
+          --format json)
+
+        STATUS_FIELD_ID=$(echo "$FIELDS" | jq -r '.fields[] | select(.name == "Status") | .id')
+        if [ -z "$STATUS_FIELD_ID" ]; then
+          echo "::error::Status フィールドが見つかりません"
+          exit 1
+        fi
+        echo "status_field_id=$STATUS_FIELD_ID" >> "$GITHUB_OUTPUT"
+
+        get_option_id() {
+          local name="$1"
+          local id
+          id=$(echo "$FIELDS" | jq -r --arg n "$name" \
+            '.fields[] | select(.name == "Status") | .options[] | select(.name == $n) | .id')
+          if [ -z "$id" ]; then
+            echo "::warning::Status オプション '$name' が見つかりません"
+          fi
+          echo "$id"
+        }
+
+        echo "todo_id=$(get_option_id "$STATUS_TODO")" >> "$GITHUB_OUTPUT"
+        echo "in_progress_id=$(get_option_id "$STATUS_IN_PROGRESS")" >> "$GITHUB_OUTPUT"
+        echo "in_review_id=$(get_option_id "$STATUS_IN_REVIEW")" >> "$GITHUB_OUTPUT"
+        echo "done_id=$(get_option_id "$STATUS_DONE")" >> "$GITHUB_OUTPUT"
+
+    - name: Add or find project item
+      id: item
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PROJECT_NUMBER: ${{ inputs.project-number }}
+        PROJECT_OWNER: ${{ inputs.project-owner }}
+        EVENT_ACTION: ${{ github.event.action }}
+        ISSUE_URL: ${{ github.event.issue.html_url }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+      run: |
+        CONTENT_URL="${ISSUE_URL:-$PR_URL}"
+        if [ -z "$CONTENT_URL" ]; then
+          echo "::warning::Issue/PR の URL を取得できません"
+          exit 0
+        fi
+
+        if [ "$EVENT_ACTION" = "opened" ]; then
+          ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" \
+            --owner "$PROJECT_OWNER" \
+            --url "$CONTENT_URL" \
+            --format json -q '.id' 2>/dev/null) || true
+        fi
+
+        if [ -z "$ITEM_ID" ]; then
+          ITEMS=$(gh project item-list "$PROJECT_NUMBER" \
+            --owner "$PROJECT_OWNER" \
+            --format json --limit 999)
+          ITEM_ID=$(echo "$ITEMS" | jq -r --arg url "$CONTENT_URL" \
+            '.items[] | select(.content.url == $url) | .id')
+        fi
+
+        if [ -z "$ITEM_ID" ]; then
+          echo "::warning::プロジェクト内にアイテムが見つかりません: $CONTENT_URL"
+        fi
+        echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Update project item status
+      if: steps.item.outputs.item_id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        PR_MERGED: ${{ github.event.pull_request.merged }}
+        ITEM_ID: ${{ steps.item.outputs.item_id }}
+        PROJECT_ID: ${{ steps.meta.outputs.project_id }}
+        STATUS_FIELD_ID: ${{ steps.meta.outputs.status_field_id }}
+        TODO_ID: ${{ steps.meta.outputs.todo_id }}
+        IN_PROGRESS_ID: ${{ steps.meta.outputs.in_progress_id }}
+        IN_REVIEW_ID: ${{ steps.meta.outputs.in_review_id }}
+        DONE_ID: ${{ steps.meta.outputs.done_id }}
+      run: |
+        OPTION_ID=""
+
+        if [ "$EVENT_NAME" = "issues" ]; then
+          case "$EVENT_ACTION" in
+            opened|reopened) OPTION_ID="$TODO_ID" ;;
+            closed)          OPTION_ID="$DONE_ID" ;;
+          esac
+        elif [ "$EVENT_NAME" = "pull_request" ]; then
+          case "$EVENT_ACTION" in
+            opened)                        OPTION_ID="$IN_PROGRESS_ID" ;;
+            ready_for_review|review_requested) OPTION_ID="$IN_REVIEW_ID" ;;
+            closed)
+              if [ "$PR_MERGED" = "true" ]; then
+                OPTION_ID="$DONE_ID"
+              else
+                OPTION_ID="$TODO_ID"
+              fi
+              ;;
+          esac
+        fi
+
+        if [ -z "$OPTION_ID" ]; then
+          echo "::notice::このイベントに対応するステータスマッピングがありません: $EVENT_NAME/$EVENT_ACTION"
+          exit 0
+        fi
+
+        gh project item-edit \
+          --id "$ITEM_ID" \
+          --field-id "$STATUS_FIELD_ID" \
+          --project-id "$PROJECT_ID" \
+          --single-select-option-id "$OPTION_ID"
+
+        echo "::notice::ステータスを更新しました (item=$ITEM_ID)"
