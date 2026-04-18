@@ -1,0 +1,269 @@
+name: Submodule Update
+description: git submodule を最新に追従させ、変更があれば PR を自動作成する
+
+inputs:
+  token:
+    description: 'push と PR 作成に使うトークン (contents: write, pull-requests: write)'
+    required: true
+  base-branch:
+    description: 'PR の向き先ブランチ'
+    required: false
+    default: 'main'
+  branch-prefix:
+    description: '自動生成するブランチ名の prefix。最終ブランチ名は {prefix}-{YYYYMMDD}'
+    required: false
+    default: 'chore/submodule-update'
+  submodule-path:
+    description: '更新対象の submodule パス。空の場合は全 submodule'
+    required: false
+    default: ''
+  submodule-branch:
+    description: 'submodule で追従するブランチ名。指定時は対象 submodule の .gitmodules 設定を一時的に上書き'
+    required: false
+    default: ''
+  commit-message:
+    description: 'コミットメッセージ (Conventional Commits)'
+    required: false
+    default: 'chore: submodule を最新に更新'
+  pr-title:
+    description: 'PR タイトル'
+    required: false
+    default: 'chore: submodule を最新に更新'
+  pr-body:
+    description: 'PR 本文。空の場合は変更サマリを自動生成'
+    required: false
+    default: ''
+  pr-labels:
+    description: 'PR に付与するラベル (カンマ区切り)'
+    required: false
+    default: ''
+  git-user-name:
+    description: 'コミット作成者名'
+    required: false
+    default: 'github-actions[bot]'
+  git-user-email:
+    description: 'コミット作成者メール'
+    required: false
+    default: '41898282+github-actions[bot]@users.noreply.github.com'
+
+outputs:
+  has-changes:
+    description: 'submodule に更新があったかどうか (true/false)'
+    value: ${{ steps.detect.outputs.has_changes }}
+  branch-name:
+    description: '自動生成したブランチ名'
+    value: ${{ steps.branch.outputs.branch_name }}
+  pr-url:
+    description: '作成または更新した PR の URL'
+    value: ${{ steps.pr.outputs.pr_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Initialize submodules
+      shell: bash
+      run: |
+        git submodule sync --recursive
+        git submodule update --init --recursive
+
+    - name: Capture pre-update state
+      id: pre
+      shell: bash
+      run: |
+        BEFORE=$(git submodule status --recursive || true)
+        {
+          echo 'status<<SUBMODULE_EOF'
+          echo "$BEFORE"
+          echo 'SUBMODULE_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Override submodule branch
+      if: inputs.submodule-branch != ''
+      shell: bash
+      env:
+        SUBMODULE_PATH: ${{ inputs.submodule-path }}
+        SUBMODULE_BRANCH: ${{ inputs.submodule-branch }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$SUBMODULE_PATH" ]; then
+          NAME=$(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' \
+            | awk -v p="$SUBMODULE_PATH" '$2 == p {print $1}' \
+            | sed -E 's/^submodule\.(.*)\.path$/\1/')
+          if [ -z "$NAME" ]; then
+            echo "::error::.gitmodules に該当する submodule がありません: $SUBMODULE_PATH"
+            exit 1
+          fi
+          NAMES="$NAME"
+        else
+          NAMES=$(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' \
+            | sed -E 's/^submodule\.(.*)\.path .*/\1/')
+        fi
+
+        while IFS= read -r name; do
+          [ -z "$name" ] && continue
+          git config --file .gitmodules "submodule.${name}.branch" "$SUBMODULE_BRANCH"
+          echo "::notice::submodule '${name}' のブランチを '${SUBMODULE_BRANCH}' に設定"
+        done <<< "$NAMES"
+
+        git submodule sync --recursive
+
+    - name: Update submodules
+      shell: bash
+      env:
+        SUBMODULE_PATH: ${{ inputs.submodule-path }}
+      run: |
+        set -euo pipefail
+        if [ -n "$SUBMODULE_PATH" ]; then
+          git submodule update --remote --recursive -- "$SUBMODULE_PATH"
+        else
+          git submodule update --remote --recursive
+        fi
+
+    - name: Restore .gitmodules
+      if: inputs.submodule-branch != ''
+      shell: bash
+      run: |
+        # submodule-branch の一時上書きはコミットしないため .gitmodules を元に戻す
+        git checkout -- .gitmodules
+
+    - name: Detect changes
+      id: detect
+      shell: bash
+      run: |
+        if git diff --quiet; then
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::submodule に更新はありません"
+        else
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Generate branch name
+      id: branch
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+      run: |
+        DATE=$(date -u +%Y%m%d)
+        echo "branch_name=${BRANCH_PREFIX}-${DATE}" >> "$GITHUB_OUTPUT"
+
+    - name: Build change summary
+      id: summary
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        BEFORE_STATUS: ${{ steps.pre.outputs.status }}
+      run: |
+        set -euo pipefail
+        AFTER=$(git submodule status --recursive)
+
+        SUMMARY=""
+        while IFS= read -r after_line; do
+          [ -z "$after_line" ] && continue
+          after_sha=$(echo "$after_line" | awk '{print $1}' | sed 's/^[-+U]//')
+          path=$(echo "$after_line" | awk '{print $2}')
+          before_line=$(echo "$BEFORE_STATUS" | awk -v p="$path" '$2 == p {print; exit}')
+          before_sha=$(echo "$before_line" | awk '{print $1}' | sed 's/^[-+U]//')
+          if [ -n "$before_line" ] && [ "$before_sha" != "$after_sha" ]; then
+            before_short=$(echo "$before_sha" | cut -c1-7)
+            after_short=$(echo "$after_sha" | cut -c1-7)
+            SUMMARY="${SUMMARY}- \`${path}\`: ${before_short} → ${after_short}"$'\n'
+          fi
+        done <<< "$AFTER"
+
+        if [ -z "$SUMMARY" ]; then
+          SUMMARY="- (変更サマリを生成できませんでした)"$'\n'
+        fi
+
+        {
+          echo 'summary<<SUBMODULE_EOF'
+          echo "$SUMMARY"
+          echo 'SUBMODULE_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Commit and push branch
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -euo pipefail
+
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+
+        ORIGINAL_REMOTE_URL=$(git remote get-url origin)
+        REMOTE_RESTORED=0
+        restore_remote() {
+          if [ "$REMOTE_RESTORED" = "0" ]; then
+            git remote set-url origin "$ORIGINAL_REMOTE_URL" || true
+            REMOTE_RESTORED=1
+          fi
+        }
+        trap restore_remote EXIT
+
+        case "$ORIGINAL_REMOTE_URL" in
+          https://*)
+            AUTH_URL="https://x-access-token:${GH_TOKEN}@${ORIGINAL_REMOTE_URL#https://}"
+            git remote set-url origin "$AUTH_URL"
+            ;;
+        esac
+
+        # 現在の HEAD (base-branch を checkout 済み) から新ブランチを作成し、
+        # submodule 更新の作業ツリー変更を保持したままコミットする
+        git checkout -B "$BRANCH_NAME"
+        git add -A
+        git commit -m "$COMMIT_MESSAGE"
+        git push --force-with-lease origin "$BRANCH_NAME"
+
+    - name: Create or update PR
+      id: pr
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY_INPUT: ${{ inputs.pr-body }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        CHANGE_SUMMARY: ${{ steps.summary.outputs.summary }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$PR_BODY_INPUT" ]; then
+          BODY="$PR_BODY_INPUT"
+        else
+          BODY=$(printf '## submodule 更新\n\n以下の submodule を最新に更新しました。\n\n%s\n\n---\n\nこの PR は `Fandhe-AI/actions/submodule-update` により自動生成されています。\n' "$CHANGE_SUMMARY")
+        fi
+
+        EXISTING=$(gh pr list \
+          --head "$BRANCH_NAME" \
+          --state open \
+          --json number,url \
+          --jq '.[0]')
+
+        if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+          PR_NUMBER=$(echo "$EXISTING" | jq -r '.number')
+          PR_URL=$(echo "$EXISTING" | jq -r '.url')
+          gh pr edit "$PR_NUMBER" --title "$PR_TITLE" --body "$BODY"
+          echo "::notice::既存 PR を更新しました: $PR_URL"
+        else
+          CREATE_ARGS=(--head "$BRANCH_NAME" --base "$BASE_BRANCH" --title "$PR_TITLE" --body "$BODY")
+          if [ -n "$PR_LABELS" ]; then
+            IFS=',' read -ra LABEL_ARR <<< "$PR_LABELS"
+            for label in "${LABEL_ARR[@]}"; do
+              label_trimmed=$(echo "$label" | sed 's/^ *//;s/ *$//')
+              [ -n "$label_trimmed" ] && CREATE_ARGS+=(--label "$label_trimmed")
+            done
+          fi
+          PR_URL=$(gh pr create "${CREATE_ARGS[@]}")
+          echo "::notice::PR を作成しました: $PR_URL"
+        fi
+
+        echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
