@@ -8,6 +8,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions。
 |---|---|
 | [post-comment](post-comment/) | Issue または PR にコメントを投稿する |
 | [project-sync](project-sync/) | Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する |
+| [submodule-update](submodule-update/) | git submodule を最新に追従させ、変更があれば PR を自動作成する |
 
 ## 使い方
 
