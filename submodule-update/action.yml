@@ -219,6 +219,12 @@ runs:
         git checkout -B "$BRANCH_NAME"
         git add -A
         git commit -m "$COMMIT_MESSAGE"
+
+        # actions/checkout は triggering ref しか fetch しないため、同日再実行時に
+        # リモート側の既存ブランチに対する remote-tracking ref が存在しない。
+        # --force-with-lease を機能させるため、push 前に明示的に fetch する
+        # (初回実行ではリモートに存在しないので失敗しても無視)。
+        git fetch origin "$BRANCH_NAME" 2>/dev/null || true
         git push --force-with-lease origin "$BRANCH_NAME"
 
     - name: Create or update PR
