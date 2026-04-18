@@ -121,11 +121,12 @@ runs:
         fi
 
     - name: Restore .gitmodules
-      if: inputs.submodule-branch != ''
+      if: always() && inputs.submodule-branch != ''
       shell: bash
       run: |
-        # submodule-branch の一時上書きはコミットしないため .gitmodules を元に戻す
-        git checkout -- .gitmodules
+        # submodule-branch の一時上書きはコミットしないため .gitmodules を元に戻す。
+        # 前段ステップが失敗した場合でも確実に復元するため always() を付ける。
+        git checkout -- .gitmodules 2>/dev/null || true
 
     - name: Detect changes
       id: detect
