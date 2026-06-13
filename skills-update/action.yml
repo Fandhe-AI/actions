@@ -149,12 +149,15 @@ runs:
         export GH_TOKEN="$FETCH_TOKEN"
         export GITHUB_TOKEN="$FETCH_TOKEN"
 
-        # 更新対象スキル名を配列化 (改行/カンマ/空白いずれの区切りも許容)
+        # 更新対象スキル名を配列化 (改行/カンマ/空白いずれの区切りも許容)。
+        # printf に末尾改行 (%s\n) を付けるのは必須: 末尾改行が無いと while read が
+        # 最後の要素を EOF 扱いして取りこぼし、単一スキル指定で TARGETS が空になり
+        # `npx skills update --project` (引数なし) が全スキルを更新してしまう。
         TARGETS=()
         while IFS= read -r s; do
           s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           [ -n "$s" ] && TARGETS+=("$s")
-        done < <(printf '%s' "${SKILLS:-}" | tr ',[:space:]' '\n')
+        done < <(printf '%s\n' "${SKILLS:-}" | tr ',[:space:]' '\n')
 
         # CLI パッケージ指定 (バージョン pin 可)
         if [ -n "$SKILLS_VERSION" ]; then
@@ -169,19 +172,31 @@ runs:
     - name: Detect changes
       id: detect
       shell: bash
+      env:
+        SKILLS: ${{ inputs.skills }}
       run: |
         set -euo pipefail
         # 変更検出はスキルが触りうるパスにスコープする。checkout 時点の作業ツリーに
         # 無関係な差分があっても (npx skills update は触らないが) スキル更新と誤認して
         # PR に巻き込まないため。git diff --quiet は未追跡を取りこぼすので、新規スキル
         # ファイル (未追跡) も拾える git status --porcelain で判定する。
-        PATHSPECS=()
-        for p in skills-lock.json .agents/skills .claude/skills; do
-          [ -e "$p" ] && PATHSPECS+=("$p")
-        done
-        # スキルパスが一つも無ければ (前提条件未充足) 更新なし扱い。空配列を pathspec に
-        # 渡すと git が全ファイルを対象にしてしまうため、必ず非空を確認してから渡す。
-        if [ "${#PATHSPECS[@]}" -eq 0 ] || [ -z "$(git status --porcelain -- "${PATHSPECS[@]}")" ]; then
+        # skills input で対象スキルが指定された場合は、そのスキルのインストールパスのみに
+        # スコープする。skills CLI は指定スキルのみ更新するが (v1.5.11 確認)、将来 CLI が
+        # source リポの他スキルまで再インストールしても PR に巻き込まないための防御。
+        PATHSPECS=(skills-lock.json)
+        if [ -n "${SKILLS:-}" ]; then
+          while IFS= read -r s; do
+            s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -z "$s" ] && continue
+            [ -e ".agents/skills/$s" ] && PATHSPECS+=(".agents/skills/$s")
+            [ -e ".claude/skills/$s" ] && PATHSPECS+=(".claude/skills/$s")
+          done < <(printf '%s\n' "$SKILLS" | tr ',[:space:]' '\n')
+        else
+          for p in .agents/skills .claude/skills; do
+            [ -e "$p" ] && PATHSPECS+=("$p")
+          done
+        fi
+        if [ -z "$(git status --porcelain -- "${PATHSPECS[@]}")" ]; then
           echo "has_changes=false" >> "$GITHUB_OUTPUT"
           echo "::notice::スキルに更新はありません"
         else
@@ -312,6 +327,7 @@ runs:
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
         GIT_USER_NAME: ${{ inputs.git-user-name }}
         GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+        SKILLS: ${{ inputs.skills }}
       run: |
         set -euo pipefail
 
@@ -351,15 +367,28 @@ runs:
         fi
         # スキル関連パスのみを stage する (detect と同じスコープ)。git add -A だと
         # 作業ツリーの無関係な差分まで PR に含めてしまうため、明示的にスコープする。
-        ADD_PATHSPECS=()
-        for p in skills-lock.json .agents/skills .claude/skills; do
-          [ -e "$p" ] && ADD_PATHSPECS+=("$p")
-        done
-        if [ "${#ADD_PATHSPECS[@]}" -eq 0 ]; then
-          echo "::error::stage 対象のスキルパスが見つかりません"
-          exit 1
+        # skills input で対象スキルが指定された場合はそのスキルのパスのみに絞り、
+        # CLI が他スキルを更新しても PR に含めない (detect と同一ロジック)。
+        ADD_PATHSPECS=(skills-lock.json)
+        if [ -n "${SKILLS:-}" ]; then
+          while IFS= read -r s; do
+            s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -z "$s" ] && continue
+            [ -e ".agents/skills/$s" ] && ADD_PATHSPECS+=(".agents/skills/$s")
+            [ -e ".claude/skills/$s" ] && ADD_PATHSPECS+=(".claude/skills/$s")
+          done < <(printf '%s\n' "$SKILLS" | tr ',[:space:]' '\n')
+        else
+          for p in .agents/skills .claude/skills; do
+            [ -e "$p" ] && ADD_PATHSPECS+=("$p")
+          done
         fi
         git add -A -- "${ADD_PATHSPECS[@]}"
+        # スコープした結果ステージに何も載らなければ (指定スキルに変更なし)、PR を作らず
+        # 明確に失敗させる。空コミットを作らないための防御。
+        if git diff --cached --quiet; then
+          echo "::error::指定スキルに stage 対象の変更がありません"
+          exit 1
+        fi
         git commit -m "$COMMIT_MESSAGE"
 
         # actions/checkout は triggering ref しか fetch しないため、同日再実行時に
