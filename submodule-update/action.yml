@@ -194,10 +194,6 @@ runs:
         AFTER=$(git submodule status --recursive)
 
         SUMMARY=""
-        # bump した submodule path を直接蓄積する。
-        # これを auto-merge の allowlist 判定にそのまま渡すことで、PR 変更ファイル
-        # からの逆算 (gh pr view --json files × .gitmodules) が不要になり正確。
-        CHANGED_PATHS=""
         while IFS= read -r after_line; do
           [ -z "$after_line" ] && continue
           after_sha=$(echo "$after_line" | awk '{print $1}' | sed 's/^[-+U]//')
@@ -208,7 +204,6 @@ runs:
             before_short=$(echo "$before_sha" | cut -c1-7)
             after_short=$(echo "$after_sha" | cut -c1-7)
             SUMMARY="${SUMMARY}- \`${path}\`: ${before_short} → ${after_short}"$'\n'
-            CHANGED_PATHS="${CHANGED_PATHS}${path}"$'\n'
           fi
         done <<< "$AFTER"
 
@@ -220,12 +215,10 @@ runs:
           echo 'summary<<SUBMODULE_EOF'
           echo "$SUMMARY"
           echo 'SUBMODULE_EOF'
-          echo 'paths<<SUBMODULE_PATHS_EOF'
-          printf '%s' "$CHANGED_PATHS"
-          echo 'SUBMODULE_PATHS_EOF'
         } >> "$GITHUB_OUTPUT"
 
     - name: Commit and push branch
+      id: commit
       if: steps.detect.outputs.has_changes == 'true'
       shell: bash
       env:
@@ -261,7 +254,25 @@ runs:
         # submodule 更新の作業ツリー変更を保持したままコミットする
         git checkout -B "$BRANCH_NAME"
         git add -A
+
+        # この PR に実際に含まれる submodule (gitlink, mode 160000) path を
+        # ステージ済み差分から直接導出する。before/after の status 比較ではなく
+        # コミットされる内容そのものを根拠にするため、ネスト submodule の出現等で
+        # 取りこぼす経路がなく、auto-merge の allowlist 判定を正確にできる。
+        BUMPED_PATHS=""
+        while IFS= read -r f; do
+          [ -z "$f" ] && continue
+          mode=$(git ls-files -s -- "$f" | awk 'NR==1 {print $1}')
+          [ "$mode" = "160000" ] && BUMPED_PATHS="${BUMPED_PATHS}${f}"$'\n'
+        done < <(git diff --cached --name-only --diff-filter=ACMR)
+
         git commit -m "$COMMIT_MESSAGE"
+
+        {
+          echo 'bumped_paths<<SUBMODULE_PATHS_EOF'
+          printf '%s' "$BUMPED_PATHS"
+          echo 'SUBMODULE_PATHS_EOF'
+        } >> "$GITHUB_OUTPUT"
 
         # actions/checkout は triggering ref しか fetch しないため、同日再実行時に
         # リモート側の既存ブランチに対する remote-tracking ref が存在しない。
@@ -328,7 +339,7 @@ runs:
         INPUT_ALLOWLIST: ${{ inputs.auto-merge-allowlist }}
         INPUT_STRATEGY: ${{ inputs.auto-merge-strategy }}
         INPUT_FALLBACK: ${{ inputs.auto-merge-immediate-fallback }}
-        BUMPED_PATHS: ${{ steps.summary.outputs.paths }}
+        BUMPED_PATHS: ${{ steps.commit.outputs.bumped_paths }}
       run: |
         set -euo pipefail
 
@@ -379,7 +390,8 @@ runs:
         fi
 
         # --- 3. 今回 bump した submodule path 集合 (action が直接保持) -------
-        # PR 変更ファイルからの逆算は不要。summary ステップが算出した path を使う。
+        # PR 変更ファイルからの逆算は不要。commit ステップがステージ済み gitlink
+        # 差分から算出した「コミットに含まれる submodule path」をそのまま使う。
         changed_submodules=()
         while IFS= read -r p; do
           [ -n "$p" ] && changed_submodules+=("$p")
