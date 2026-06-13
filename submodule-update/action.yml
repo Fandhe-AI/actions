@@ -245,7 +245,15 @@ runs:
 
         case "$ORIGINAL_REMOTE_URL" in
           https://*)
-            AUTH_URL="https://x-access-token:${GH_TOKEN}@${ORIGINAL_REMOTE_URL#https://}"
+            # 既存の userinfo (埋め込み資格情報) を除いてから token を注入する。
+            # actions/checkout が persist-credentials で remote URL に creds を
+            # 埋め込む runner では、単純連結だと
+            # https://x-access-token:NEW@x-access-token:OLD@github.com/... の
+            # 二重 userinfo になり、curl が 2 つ目を host:port と解釈して
+            # "Port number was not a decimal number" で fetch/push が失敗する。
+            REMOTE_HOSTPATH="${ORIGINAL_REMOTE_URL#https://}"
+            REMOTE_HOSTPATH="${REMOTE_HOSTPATH#*@}"
+            AUTH_URL="https://x-access-token:${GH_TOKEN}@${REMOTE_HOSTPATH}"
             git remote set-url origin "$AUTH_URL"
             ;;
         esac
