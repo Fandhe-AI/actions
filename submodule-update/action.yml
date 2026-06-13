@@ -45,6 +45,32 @@ inputs:
     description: 'コミット作成者メール'
     required: false
     default: '41898282+github-actions[bot]@users.noreply.github.com'
+  auto-merge:
+    description: >-
+      PR 作成後に条件を満たせば auto-merge する。
+      空/null/true/yes/on/1/enabled → 有効、false/no/off/0/disabled → 無効、
+      解釈不能値は安全側で無効。consumer は ${{ vars.SUBMODULE_AUTO_MERGE }} を
+      渡す想定で、未設定(空文字)＝有効。ただし既存互換のため input 既定値のみ
+      'false'(無効) とする。この「空=有効 / 既定=無効」の非対称は意図的。
+    required: false
+    default: 'false'
+  auto-merge-allowlist:
+    description: >-
+      自動マージを許可する submodule path の allowlist。
+      空なら全 submodule 許可 (allow-all)。改行/カンマ区切りで複数指定でき、
+      各エントリは biome scanner 準拠の glob (順次評価・last-match-wins)。
+    required: false
+    default: ''
+  auto-merge-strategy:
+    description: 'マージ戦略 (squash / rebase / merge)'
+    required: false
+    default: 'squash'
+  auto-merge-immediate-fallback:
+    description: >-
+      gh pr merge --auto が allow_auto_merge:false で失敗した時に
+      即時マージへフォールバックするか (true/false)。
+    required: false
+    default: 'true'
 
 outputs:
   has-changes:
@@ -56,6 +82,14 @@ outputs:
   pr-url:
     description: '作成または更新した PR の URL'
     value: ${{ steps.pr.outputs.pr_url }}
+  merged:
+    description: 'auto-merge を実行した (有効化 or 即時マージ) かどうか (true/false)'
+    value: ${{ steps.automerge.outputs.merged }}
+  auto-merge-skipped-reason:
+    description: >-
+      auto-merge をスキップした理由 (スキップ時のみ設定)。
+      disabled / unparseable-switch / unknown-paths / not-allowlisted のいずれか。
+    value: ${{ steps.automerge.outputs.skipped_reason }}
 
 runs:
   using: composite
@@ -184,6 +218,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Commit and push branch
+      id: commit
       if: steps.detect.outputs.has_changes == 'true'
       shell: bash
       env:
@@ -219,7 +254,25 @@ runs:
         # submodule 更新の作業ツリー変更を保持したままコミットする
         git checkout -B "$BRANCH_NAME"
         git add -A
+
+        # この PR に実際に含まれる submodule (gitlink, mode 160000) path を
+        # ステージ済み差分から直接導出する。before/after の status 比較ではなく
+        # コミットされる内容そのものを根拠にするため、ネスト submodule の出現等で
+        # 取りこぼす経路がなく、auto-merge の allowlist 判定を正確にできる。
+        BUMPED_PATHS=""
+        while IFS= read -r f; do
+          [ -z "$f" ] && continue
+          mode=$(git ls-files -s -- "$f" | awk 'NR==1 {print $1}')
+          [ "$mode" = "160000" ] && BUMPED_PATHS="${BUMPED_PATHS}${f}"$'\n'
+        done < <(git diff --cached --name-only --diff-filter=ACMR)
+
         git commit -m "$COMMIT_MESSAGE"
+
+        {
+          echo 'bumped_paths<<SUBMODULE_PATHS_EOF'
+          printf '%s' "$BUMPED_PATHS"
+          echo 'SUBMODULE_PATHS_EOF'
+        } >> "$GITHUB_OUTPUT"
 
         # actions/checkout は triggering ref しか fetch しないため、同日再実行時に
         # リモート側の既存ブランチに対する remote-tracking ref が存在しない。
@@ -274,3 +327,201 @@ runs:
         fi
 
         echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+    - name: Auto-merge PR if allowed
+      id: automerge
+      if: steps.detect.outputs.has_changes == 'true' && steps.pr.outputs.pr_url != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_URL: ${{ steps.pr.outputs.pr_url }}
+        INPUT_AUTO_MERGE: ${{ inputs.auto-merge }}
+        INPUT_ALLOWLIST: ${{ inputs.auto-merge-allowlist }}
+        INPUT_STRATEGY: ${{ inputs.auto-merge-strategy }}
+        INPUT_FALLBACK: ${{ inputs.auto-merge-immediate-fallback }}
+        BUMPED_PATHS: ${{ steps.commit.outputs.bumped_paths }}
+      run: |
+        set -euo pipefail
+
+        # 既定は未マージ。マージ成功時のみ後から true で上書きする
+        # (GITHUB_OUTPUT は同一キーの後勝ち)。
+        echo "merged=false" >> "$GITHUB_OUTPUT"
+
+        # --- 1. 全体スイッチ判定 -------------------------------------------
+        # 注意: 空文字/null は「有効」に倒す。consumer が
+        # ${{ vars.SUBMODULE_AUTO_MERGE }} を渡し未設定=有効としたいため。
+        # 一方 input 既定値だけは 'false' なので、consumer が auto-merge を一切
+        # 渡さない場合は無効 = 既存互換挙動。この非対称は意図的。
+        switch="$(printf '%s' "${INPUT_AUTO_MERGE:-}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$switch" in
+          '' | true | yes | on | 1 | enabled | enable)
+            : # 自動マージ有効 (未設定含む)
+            ;;
+          false | no | off | 0 | disabled | disable)
+            echo "::notice::auto-merge=${INPUT_AUTO_MERGE} のため自動マージをスキップ"
+            echo "skipped_reason=disabled" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+          *)
+            # 解釈不能値はそのまま ::warning:: に埋め込まない (::command:: 注入防止)
+            echo "::warning::auto-merge の値を解釈できないため自動マージを無効化します"
+            echo "auto-merge=${INPUT_AUTO_MERGE}"
+            echo "skipped_reason=unparseable-switch" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+        esac
+
+        # --- 2. allowlist をパース (改行 / カンマ区切り → 配列) -------------
+        patterns=()
+        while IFS= read -r line; do
+          line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$line" ] && patterns+=("$line")
+        done < <(printf '%s' "${INPUT_ALLOWLIST:-}" | tr ',' '\n')
+
+        if [ "${#patterns[@]}" -eq 0 ]; then
+          allow_all=1
+          echo "::notice::allowlist 未指定 → 全 submodule を自動マージ対象とします"
+        else
+          allow_all=0
+          # ${patterns[*]} を直接 echo せず printf で改行出力 (::command:: 注入防止)
+          printf '::notice::allowlist %d 件\n' "${#patterns[@]}"
+          printf '%s\n' "${patterns[@]}"
+        fi
+
+        # --- 3. 今回 bump した submodule path 集合 (action が直接保持) -------
+        # PR 変更ファイルからの逆算は不要。commit ステップがステージ済み gitlink
+        # 差分から算出した「コミットに含まれる submodule path」をそのまま使う。
+        changed_submodules=()
+        while IFS= read -r p; do
+          [ -n "$p" ] && changed_submodules+=("$p")
+        done <<< "${BUMPED_PATHS:-}"
+
+        # --- 4. glob マッチング (biome scanner 準拠) -----------------------
+        # glob を ERE に変換。* はセパレータ非跨ぎ、** は跨ぎ。
+        glob_to_regex() {
+          local glob="$1" out="" i=0 n=${#1} c nxt
+          while [ "$i" -lt "$n" ]; do
+            c="${glob:i:1}"
+            case "$c" in
+              '*')
+                nxt="${glob:i+1:1}"
+                if [ "$nxt" = '*' ]; then
+                  out+='.*'
+                  i=$((i + 2))
+                else
+                  out+='[^/]*'
+                  i=$((i + 1))
+                fi
+                ;;
+              '?')
+                out+='[^/]'
+                i=$((i + 1))
+                ;;
+              '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']' | '-' | \\)
+                out+="\\$c"
+                i=$((i + 1))
+                ;;
+              *)
+                out+="$c"
+                i=$((i + 1))
+                ;;
+            esac
+          done
+          printf '%s' "$out"
+        }
+
+        # path が allowlist で許可されるか (順次評価・last-match-wins)。
+        # 全パターンを順に見て、最後にマッチしたものが positive なら許可、
+        # negation (先頭 '!') なら不許可。どれにもマッチしなければ不許可。
+        is_allowed() {
+          local path="$1" decision=1 p neg glob re
+          for p in "${patterns[@]}"; do
+            if [ "${p:0:1}" = '!' ]; then
+              neg=1
+              glob="${p:1}"
+            else
+              neg=0
+              glob="$p"
+            fi
+            re="$(glob_to_regex "$glob")"
+            if [[ "$path" =~ ^${re}$ ]]; then
+              if [ "$neg" -eq 1 ]; then
+                decision=1
+              else
+                decision=0
+              fi
+            fi
+          done
+          return "$decision"
+        }
+
+        # --- 5. 判定 ------------------------------------------------------
+        if [ "$allow_all" -eq 1 ]; then
+          proceed=1
+        elif [ "${#changed_submodules[@]}" -eq 0 ]; then
+          # allowlist 指定済みなのに bump path を特定できない → 安全側で手動
+          echo "::warning::bump した submodule を特定できません。allowlist 指定時は安全のため自動マージをスキップします。"
+          echo "skipped_reason=unknown-paths" >> "$GITHUB_OUTPUT"
+          exit 0
+        else
+          proceed=1
+          for sm in "${changed_submodules[@]}"; do
+            # path も別行に出力 (他箇所同様 ::command:: 注入を避ける)
+            if is_allowed "$sm"; then
+              echo "::notice::submodule は自動マージ許可"
+              printf '%s\n' "$sm"
+            else
+              echo "::notice::submodule は allowlist 対象外 → 手動レビュー"
+              printf '%s\n' "$sm"
+              proceed=0
+            fi
+          done
+        fi
+
+        if [ "$proceed" -ne 1 ]; then
+          echo "::notice::自動マージ条件を満たさないため手動レビュー対象として残します: ${PR_URL}"
+          echo "skipped_reason=not-allowlisted" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # --- 6. strategy / fallback の解釈 --------------------------------
+        strategy="$(printf '%s' "${INPUT_STRATEGY:-squash}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$strategy" in
+          squash | rebase | merge) : ;;
+          *)
+            echo "::warning::auto-merge-strategy を解釈できないため squash を使用します"
+            echo "auto-merge-strategy=${INPUT_STRATEGY}"
+            strategy='squash'
+            ;;
+        esac
+
+        fb="$(printf '%s' "${INPUT_FALLBACK:-true}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$fb" in
+          '' | true | yes | on | 1 | enabled | enable) fallback=1 ;;
+          *) fallback=0 ;;
+        esac
+
+        # --- 7. マージ実行 (auto-merge → 即時マージ フォールバック) --------
+        # $PR_URL は -- でフラグと区別。gh 出力 ($out) は別 echo 行に分離。
+        if out="$(gh pr merge -- "$PR_URL" --auto --"$strategy" 2>&1)"; then
+          echo "::notice::auto-merge を有効化しました: ${PR_URL}"
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+        elif [ "$fallback" -eq 1 ]; then
+          echo "::warning::auto-merge を有効化できません。即時 ${strategy} merge を試みます。"
+          echo "$out"
+          if out="$(gh pr merge -- "$PR_URL" --"$strategy" 2>&1)"; then
+            echo "::notice::即時 ${strategy} merge しました: ${PR_URL}"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::自動マージに失敗しました。"
+            echo "$out"
+            exit 1
+          fi
+        else
+          echo "::error::auto-merge を有効化できず、フォールバックも無効のため失敗します。"
+          echo "$out"
+          exit 1
+        fi
