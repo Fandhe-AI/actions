@@ -49,7 +49,7 @@ inputs:
     description: >-
       PR 作成後に条件を満たせば auto-merge する。
       空/null/true/yes/on/1/enabled → 有効、false/no/off/0/disabled → 無効、
-      解釈不能値は安全側で無効。consumer は ${{ vars.SUBMODULE_AUTO_MERGE }} を
+      解釈不能値は安全側で無効。consumer は vars.SUBMODULE_AUTO_MERGE を
       渡す想定で、未設定(空文字)＝有効。ただし既存互換のため input 既定値のみ
       'false'(無効) とする。この「空=有効 / 既定=無効」の非対称は意図的。
     required: false
@@ -349,7 +349,7 @@ runs:
 
         # --- 1. 全体スイッチ判定 -------------------------------------------
         # 注意: 空文字/null は「有効」に倒す。consumer が
-        # ${{ vars.SUBMODULE_AUTO_MERGE }} を渡し未設定=有効としたいため。
+        # vars.SUBMODULE_AUTO_MERGE を渡し未設定=有効としたいため。
         # 一方 input 既定値だけは 'false' なので、consumer が auto-merge を一切
         # 渡さない場合は無効 = 既存互換挙動。この非対称は意図的。
         switch="$(printf '%s' "${INPUT_AUTO_MERGE:-}" \
