@@ -202,10 +202,12 @@ runs:
         # スキルは .agents/skills/<name>/... と .claude/skills/<name> に置かれるため
         # そのセグメントから名前を抽出し重複排除する。git status --porcelain は
         # 未追跡 (新規スキル) も拾うため、初回/lock 無し実行でも取りこぼさない。
+        # grep はマッチ 0 件で exit 1 を返す。set -euo pipefail 下では pipefail で
+        # 関数全体が失敗扱いになるため、grep のみ `|| true` で許容する (sed の異常は伝播)。
         skills_from_worktree() {
           git status --porcelain \
             | sed -E 's/^...//; s/^.* -> //' \
-            | grep -oE '(\.agents|\.claude)/skills/[^/]+' \
+            | { grep -oE '(\.agents|\.claude)/skills/[^/]+' || true; } \
             | sed -E 's#.*/skills/##' \
             | sort -u
         }
@@ -261,6 +263,20 @@ runs:
             SUMMARY="${SUMMARY}- \`${name}\`: $(echo "$bh" | cut -c1-7) → $(echo "$ah" | cut -c1-7)"$'\n'
           fi
         done <<< "$DIFF_TSV"
+
+        # computedHash 差分が空でも、porcelain にスキルツリーの変更があれば
+        # 作業ツリーの変更パスから名前を導出する (hash 未更新でも allowlist 判定を機能させる)。
+        if [ -z "$NAMES" ]; then
+          NAMES=$(skills_from_worktree)
+          if [ -n "$NAMES" ]; then
+            NAMES="${NAMES}"$'\n'
+          fi
+        fi
+
+        # SUMMARY が hash 差分から作れなかった場合は NAMES からサマリを構築する。
+        if [ -z "$SUMMARY" ] && [ -n "$NAMES" ]; then
+          SUMMARY=$(printf '%s' "$NAMES" | sed '/^$/d; s/^/- `/;s/$/`/')$'\n'
+        fi
 
         if [ -z "$SUMMARY" ]; then
           SUMMARY="- (変更サマリを生成できませんでした)"$'\n'
