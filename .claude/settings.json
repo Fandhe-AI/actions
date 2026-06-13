@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Fandhe-AI/actions: 日本語でやりとり / 作業は subagent へ委譲し main 消費を抑える (rules/delegation.md, rules/delegation-impl.md) / Composite Action は bash + gh CLI・入力は env 経由・利用側は SHA 固定 (rules/coding-actions.md) / Conventional Commits 厳守 (--no-verify 禁止) / 機微な変更は security-auditor で監査'"
+          }
+        ]
+      }
+    ]
+  }
+}
