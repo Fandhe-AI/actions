@@ -175,7 +175,10 @@ runs:
       id: detect
       shell: bash
       run: |
-        if git diff --quiet; then
+        # git diff --quiet は tracked の index↔作業ツリー差分しか見ず、未追跡ファイルを
+        # 取りこぼす。スキル更新は新規スキルファイル (未追跡) の追加もありうるため、
+        # 未追跡も含めて検出する git status --porcelain で判定する。
+        if [ -z "$(git status --porcelain)" ]; then
           echo "has_changes=false" >> "$GITHUB_OUTPUT"
           echo "::notice::スキルに更新はありません"
         else
@@ -265,6 +268,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
         GIT_USER_NAME: ${{ inputs.git-user-name }}
         GIT_USER_EMAIL: ${{ inputs.git-user-email }}
@@ -291,9 +295,20 @@ runs:
             ;;
         esac
 
-        # 現在の HEAD (base-branch を checkout 済み) から新ブランチを作成し、
-        # skills update の作業ツリー変更を保持したままコミットする
-        git checkout -B "$BRANCH_NAME"
+        # 新ブランチは必ず base-branch を起点にする。actions/checkout が base 以外の
+        # ref を出していても (例: feature ブランチ上での workflow_dispatch)、PR に
+        # base からのスキル差分以外の無関係なコミットが混入しないようにするため、
+        # skills update の作業ツリー変更 (未追跡含む) を stash で退避し、origin の
+        # base-branch を起点に新ブランチを作ってから再適用する。
+        git fetch origin "$BASE_BRANCH"
+        git stash push --include-untracked -m skills-update
+        git checkout -B "$BRANCH_NAME" "origin/$BASE_BRANCH"
+        # base 上にスキル更新を再適用。スキルファイルは通常 base と衝突しないが、
+        # 万一コンフリクトした場合は中途半端な PR を作らず明確に失敗させる。
+        if ! git stash pop; then
+          echo "::error::base-branch '${BASE_BRANCH}' へのスキル更新の再適用でコンフリクトが発生しました"
+          exit 1
+        fi
         git add -A
         git commit -m "$COMMIT_MESSAGE"
 
