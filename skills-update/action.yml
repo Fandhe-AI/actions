@@ -639,14 +639,16 @@ runs:
         esac
 
         # --- 7. マージ実行 (auto-merge → 即時マージ フォールバック) --------
-        # $PR_URL は -- でフラグと区別。gh 出力 ($out) は別 echo 行に分離。
-        if out="$(gh pr merge -- "$PR_URL" --auto --"$strategy" 2>&1)"; then
+        # $PR_URL は -- でフラグと区別。-- はフラグの後に置く (前に置くと
+        # --auto / --$strategy が位置引数扱いになり gh が弾く)。
+        # gh 出力 ($out) は別 echo 行に分離。
+        if out="$(gh pr merge --auto --"$strategy" -- "$PR_URL" 2>&1)"; then
           echo "::notice::auto-merge を有効化しました: ${PR_URL}"
           echo "merged=true" >> "$GITHUB_OUTPUT"
         elif [ "$fallback" -eq 1 ]; then
           echo "::warning::auto-merge を有効化できません。即時 ${strategy} merge を試みます。"
           echo "$out"
-          if out="$(gh pr merge -- "$PR_URL" --"$strategy" 2>&1)"; then
+          if out="$(gh pr merge --"$strategy" -- "$PR_URL" 2>&1)"; then
             echo "::notice::即時 ${strategy} merge しました: ${PR_URL}"
             echo "merged=true" >> "$GITHUB_OUTPUT"
           else
