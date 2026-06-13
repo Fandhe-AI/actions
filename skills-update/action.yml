@@ -183,14 +183,21 @@ runs:
         # skills input で対象スキルが指定された場合は、そのスキルのインストールパスのみに
         # スコープする。skills CLI は指定スキルのみ更新するが (v1.5.11 確認)、将来 CLI が
         # source リポの他スキルまで再インストールしても PR に巻き込まないための防御。
+        # 分岐は「文字列が非空か」ではなく「パース後のスキル名が 1 件以上か」で判定する。
+        # Update step の TARGETS と同じパースにし、空白/カンマのみ入力 (パース結果 0 件) を
+        # Update step (引数なし → 全スキル更新) と同じ「全スキルスコープ」に揃える。
+        # これを揃えないと lockfile だけ更新してスキルファイル変更を伴わない PR ができる。
+        PARSED=()
+        while IFS= read -r s; do
+          s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$s" ] && PARSED+=("$s")
+        done < <(printf '%s\n' "${SKILLS:-}" | tr ',[:space:]' '\n')
         PATHSPECS=(skills-lock.json)
-        if [ -n "${SKILLS:-}" ]; then
-          while IFS= read -r s; do
-            s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -z "$s" ] && continue
+        if [ "${#PARSED[@]}" -gt 0 ]; then
+          for s in "${PARSED[@]}"; do
             [ -e ".agents/skills/$s" ] && PATHSPECS+=(".agents/skills/$s")
             [ -e ".claude/skills/$s" ] && PATHSPECS+=(".claude/skills/$s")
-          done < <(printf '%s\n' "$SKILLS" | tr ',[:space:]' '\n')
+          done
         else
           for p in .agents/skills .claude/skills; do
             [ -e "$p" ] && PATHSPECS+=("$p")
@@ -369,14 +376,18 @@ runs:
         # 作業ツリーの無関係な差分まで PR に含めてしまうため、明示的にスコープする。
         # skills input で対象スキルが指定された場合はそのスキルのパスのみに絞り、
         # CLI が他スキルを更新しても PR に含めない (detect と同一ロジック)。
+        # 分岐は detect と同じく「パース後のスキル名が 1 件以上か」で判定する。
+        PARSED=()
+        while IFS= read -r s; do
+          s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$s" ] && PARSED+=("$s")
+        done < <(printf '%s\n' "${SKILLS:-}" | tr ',[:space:]' '\n')
         ADD_PATHSPECS=(skills-lock.json)
-        if [ -n "${SKILLS:-}" ]; then
-          while IFS= read -r s; do
-            s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -z "$s" ] && continue
+        if [ "${#PARSED[@]}" -gt 0 ]; then
+          for s in "${PARSED[@]}"; do
             [ -e ".agents/skills/$s" ] && ADD_PATHSPECS+=(".agents/skills/$s")
             [ -e ".claude/skills/$s" ] && ADD_PATHSPECS+=(".claude/skills/$s")
-          done < <(printf '%s\n' "$SKILLS" | tr ',[:space:]' '\n')
+          done
         else
           for p in .agents/skills .claude/skills; do
             [ -e "$p" ] && ADD_PATHSPECS+=("$p")
