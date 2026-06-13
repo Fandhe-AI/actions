@@ -170,10 +170,18 @@ runs:
       id: detect
       shell: bash
       run: |
-        # git diff --quiet は tracked の index↔作業ツリー差分しか見ず、未追跡ファイルを
-        # 取りこぼす。スキル更新は新規スキルファイル (未追跡) の追加もありうるため、
-        # 未追跡も含めて検出する git status --porcelain で判定する。
-        if [ -z "$(git status --porcelain)" ]; then
+        set -euo pipefail
+        # 変更検出はスキルが触りうるパスにスコープする。checkout 時点の作業ツリーに
+        # 無関係な差分があっても (npx skills update は触らないが) スキル更新と誤認して
+        # PR に巻き込まないため。git diff --quiet は未追跡を取りこぼすので、新規スキル
+        # ファイル (未追跡) も拾える git status --porcelain で判定する。
+        PATHSPECS=()
+        for p in skills-lock.json .agents/skills .claude/skills; do
+          [ -e "$p" ] && PATHSPECS+=("$p")
+        done
+        # スキルパスが一つも無ければ (前提条件未充足) 更新なし扱い。空配列を pathspec に
+        # 渡すと git が全ファイルを対象にしてしまうため、必ず非空を確認してから渡す。
+        if [ "${#PATHSPECS[@]}" -eq 0 ] || [ -z "$(git status --porcelain -- "${PATHSPECS[@]}")" ]; then
           echo "has_changes=false" >> "$GITHUB_OUTPUT"
           echo "::notice::スキルに更新はありません"
         else
@@ -341,7 +349,17 @@ runs:
           echo "::error::base-branch '${BASE_BRANCH}' へのスキル更新の再適用でコンフリクトが発生しました"
           exit 1
         fi
-        git add -A
+        # スキル関連パスのみを stage する (detect と同じスコープ)。git add -A だと
+        # 作業ツリーの無関係な差分まで PR に含めてしまうため、明示的にスコープする。
+        ADD_PATHSPECS=()
+        for p in skills-lock.json .agents/skills .claude/skills; do
+          [ -e "$p" ] && ADD_PATHSPECS+=("$p")
+        done
+        if [ "${#ADD_PATHSPECS[@]}" -eq 0 ]; then
+          echo "::error::stage 対象のスキルパスが見つかりません"
+          exit 1
+        fi
+        git add -A -- "${ADD_PATHSPECS[@]}"
         git commit -m "$COMMIT_MESSAGE"
 
         # actions/checkout は triggering ref しか fetch しないため、同日再実行時に
