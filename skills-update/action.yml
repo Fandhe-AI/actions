@@ -27,10 +27,6 @@ inputs:
     description: '使用する `skills` CLI のバージョン (npm semver)。空なら latest'
     required: false
     default: ''
-  lock-file:
-    description: 'スキルのロックファイルのパス (変更サマリ生成と差分比較に使用)'
-    required: false
-    default: 'skills-lock.json'
   commit-message:
     description: 'コミットメッセージ (Conventional Commits)'
     required: false
@@ -110,16 +106,15 @@ runs:
     - name: Capture pre-update lock state
       id: pre
       shell: bash
-      env:
-        LOCK_FILE: ${{ inputs.lock-file }}
       run: |
         set -euo pipefail
-        # 更新直前のロックファイルを退避し、後段の変更サマリ生成で before として使う。
+        # ロックファイルは npx skills が常に project ルートの skills-lock.json を更新するため固定。
+        # 更新直前の内容を退避し、後段の変更サマリ生成で before として使う。
         # 作業ツリーの現在値を基準にすることで「今回の update で変わった分」だけを正確に拾える。
-        if [ -f "$LOCK_FILE" ]; then
-          cp "$LOCK_FILE" "$RUNNER_TEMP/skills-lock.before.json"
+        if [ -f skills-lock.json ]; then
+          cp skills-lock.json "$RUNNER_TEMP/skills-lock.before.json"
         else
-          echo "::warning::ロックファイルが見つかりません: ${LOCK_FILE} (変更サマリは限定的になります)"
+          echo "::warning::skills-lock.json が見つかりません (変更サマリは限定的になります)"
           echo '{}' > "$RUNNER_TEMP/skills-lock.before.json"
         fi
 
@@ -199,22 +194,43 @@ runs:
       id: summary
       if: steps.detect.outputs.has_changes == 'true'
       shell: bash
-      env:
-        LOCK_FILE: ${{ inputs.lock-file }}
       run: |
         set -euo pipefail
         BEFORE_FILE="$RUNNER_TEMP/skills-lock.before.json"
 
-        # ロックファイルが無い (lock 管理外) 場合は git diff のファイル一覧でサマリ代替
-        if [ ! -f "$LOCK_FILE" ]; then
-          SUMMARY=$(git diff --name-only | sed 's/^/- `/;s/$/`/')
-          [ -z "$SUMMARY" ] && SUMMARY="- (変更サマリを生成できませんでした)"
+        # 変更されたスキル名を作業ツリーの変更パスから導出する関数。
+        # スキルは .agents/skills/<name>/... と .claude/skills/<name> に置かれるため
+        # そのセグメントから名前を抽出し重複排除する。git status --porcelain は
+        # 未追跡 (新規スキル) も拾うため、初回/lock 無し実行でも取りこぼさない。
+        skills_from_worktree() {
+          git status --porcelain \
+            | sed -E 's/^...//; s/^.* -> //' \
+            | grep -oE '(\.agents|\.claude)/skills/[^/]+' \
+            | sed -E 's#.*/skills/##' \
+            | sort -u
+        }
+
+        # skills-lock.json が無い (lock 管理外) 場合は作業ツリーの変更からサマリ代替。
+        # changed_skills も空にせず、変更パスからスキル名を導出して allowlist 判定を機能させる。
+        if [ ! -f skills-lock.json ]; then
+          NAMES=$(skills_from_worktree)
+          if [ -n "$NAMES" ]; then
+            SUMMARY=$(printf '%s\n' "$NAMES" | sed 's/^/- `/;s/$/`/')
+          else
+            # スキルディレクトリ外の変更のみ: 変更ファイル一覧でサマリ (未追跡含む)
+            SUMMARY=$(git status --porcelain | sed -E 's/^...//; s/^.* -> //' | sed 's/^/- `/;s/$/`/')
+            [ -z "$SUMMARY" ] && SUMMARY="- (変更サマリを生成できませんでした)"
+          fi
           {
             echo 'summary<<SKILLS_EOF'
             echo "$SUMMARY"
             echo 'SKILLS_EOF'
           } >> "$GITHUB_OUTPUT"
-          printf 'changed_skills<<SKILLS_NAMES_EOF\nSKILLS_NAMES_EOF\n' >> "$GITHUB_OUTPUT"
+          {
+            echo 'changed_skills<<SKILLS_NAMES_EOF'
+            [ -n "$NAMES" ] && printf '%s\n' "$NAMES"
+            echo 'SKILLS_NAMES_EOF'
+          } >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -222,7 +238,7 @@ runs:
         # (name<TAB>before-hash<TAB>after-hash)。追加/削除は欠損側が空文字。
         DIFF_TSV=$(jq -rn \
           --slurpfile before "$BEFORE_FILE" \
-          --slurpfile after "$LOCK_FILE" '
+          --slurpfile after skills-lock.json '
             ($before[0].skills // {}) as $b
             | ($after[0].skills // {}) as $a
             | (($b | keys) + ($a | keys) | unique)[]

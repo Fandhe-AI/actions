@@ -110,7 +110,6 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 | `branch-prefix` | No | `chore/skills-update` | 自動生成するブランチ名の prefix。最終ブランチ名は `{prefix}-{YYYYMMDD}` (UTC) |
 | `skills` | No | `` (全スキル) | 更新対象のスキル名 (改行/カンマ/空白区切り) |
 | `skills-version` | No | `` (latest) | 使用する `skills` CLI のバージョン (npm semver) |
-| `lock-file` | No | `skills-lock.json` | スキルのロックファイルのパス (変更サマリ生成・差分比較に使用) |
 | `commit-message` | No | `chore: エージェントスキルを最新に更新` | コミットメッセージ |
 | `pr-title` | No | `chore: エージェントスキルを最新に更新` | PR タイトル |
 | `pr-body` | No | 自動生成 | PR 本文。空時は変更サマリを自動挿入 |
