@@ -1,0 +1,548 @@
+name: Skills Update
+description: '`npx skills` で導入したエージェントスキルを最新に更新し、変更があれば PR を自動作成する'
+
+inputs:
+  token:
+    description: 'push と PR 作成に使うトークン (contents: write, pull-requests: write)'
+    required: true
+  source-token:
+    description: >-
+      private なスキルソースリポジトリの取得に使うトークン。
+      空の場合は token を流用する。public ソースのみなら省略可。
+    required: false
+    default: ''
+  base-branch:
+    description: 'PR の向き先ブランチ'
+    required: false
+    default: 'main'
+  branch-prefix:
+    description: '自動生成するブランチ名の prefix。最終ブランチ名は {prefix}-{YYYYMMDD}'
+    required: false
+    default: 'chore/skills-update'
+  skills:
+    description: '更新対象のスキル名 (改行/カンマ/空白区切り)。空の場合は全スキル'
+    required: false
+    default: ''
+  skills-version:
+    description: '使用する `skills` CLI のバージョン (npm semver)。空なら latest'
+    required: false
+    default: ''
+  lock-file:
+    description: 'スキルのロックファイルのパス (変更サマリ生成と差分比較に使用)'
+    required: false
+    default: 'skills-lock.json'
+  commit-message:
+    description: 'コミットメッセージ (Conventional Commits)'
+    required: false
+    default: 'chore: エージェントスキルを最新に更新'
+  pr-title:
+    description: 'PR タイトル'
+    required: false
+    default: 'chore: エージェントスキルを最新に更新'
+  pr-body:
+    description: 'PR 本文。空の場合は変更サマリを自動生成'
+    required: false
+    default: ''
+  pr-labels:
+    description: 'PR に付与するラベル (カンマ区切り)'
+    required: false
+    default: ''
+  git-user-name:
+    description: 'コミット作成者名'
+    required: false
+    default: 'github-actions[bot]'
+  git-user-email:
+    description: 'コミット作成者メール'
+    required: false
+    default: '41898282+github-actions[bot]@users.noreply.github.com'
+  auto-merge:
+    description: >-
+      PR 作成後に条件を満たせば auto-merge する。
+      空/null/true/yes/on/1/enabled → 有効、false/no/off/0/disabled → 無効、
+      解釈不能値は安全側で無効。consumer は ${{ vars.SKILLS_AUTO_MERGE }} を
+      渡す想定で、未設定(空文字)＝有効。ただし既存互換のため input 既定値のみ
+      'false'(無効) とする。この「空=有効 / 既定=無効」の非対称は意図的。
+    required: false
+    default: 'false'
+  auto-merge-allowlist:
+    description: >-
+      自動マージを許可するスキル名の allowlist。
+      空なら全スキル許可 (allow-all)。改行/カンマ区切りで複数指定でき、
+      各エントリは biome scanner 準拠の glob (順次評価・last-match-wins)。
+    required: false
+    default: ''
+  auto-merge-strategy:
+    description: 'マージ戦略 (squash / rebase / merge)'
+    required: false
+    default: 'squash'
+  auto-merge-immediate-fallback:
+    description: >-
+      gh pr merge --auto が allow_auto_merge:false で失敗した時に
+      即時マージへフォールバックするか (true/false)。
+    required: false
+    default: 'true'
+
+outputs:
+  has-changes:
+    description: 'スキルに更新があったかどうか (true/false)'
+    value: ${{ steps.detect.outputs.has_changes }}
+  updated-skills:
+    description: '更新されたスキル名の一覧 (改行区切り)'
+    value: ${{ steps.summary.outputs.changed_skills }}
+  branch-name:
+    description: '自動生成したブランチ名'
+    value: ${{ steps.branch.outputs.branch_name }}
+  pr-url:
+    description: '作成または更新した PR の URL'
+    value: ${{ steps.pr.outputs.pr_url }}
+  merged:
+    description: 'auto-merge を実行した (有効化 or 即時マージ) かどうか (true/false)'
+    value: ${{ steps.automerge.outputs.merged }}
+  auto-merge-skipped-reason:
+    description: >-
+      auto-merge をスキップした理由 (スキップ時のみ設定)。
+      disabled / unparseable-switch / unknown-skills / not-allowlisted のいずれか。
+    value: ${{ steps.automerge.outputs.skipped_reason }}
+
+runs:
+  using: composite
+  steps:
+    - name: Capture pre-update lock state
+      id: pre
+      shell: bash
+      env:
+        LOCK_FILE: ${{ inputs.lock-file }}
+      run: |
+        set -euo pipefail
+        # 更新直前のロックファイルを退避し、後段の変更サマリ生成で before として使う。
+        # 作業ツリーの現在値を基準にすることで「今回の update で変わった分」だけを正確に拾える。
+        if [ -f "$LOCK_FILE" ]; then
+          cp "$LOCK_FILE" "$RUNNER_TEMP/skills-lock.before.json"
+        else
+          echo "::warning::ロックファイルが見つかりません: ${LOCK_FILE} (変更サマリは限定的になります)"
+          echo '{}' > "$RUNNER_TEMP/skills-lock.before.json"
+        fi
+
+    - name: Update skills
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        SOURCE_TOKEN: ${{ inputs.source-token }}
+        SKILLS: ${{ inputs.skills }}
+        SKILLS_VERSION: ${{ inputs.skills-version }}
+      run: |
+        set -euo pipefail
+
+        # private なソースリポジトリを skills CLI が取得できるよう、github.com への
+        # アクセスにトークンを差し込む。source-token 未指定なら token を流用。
+        # 後続ステップに認証情報を残さないよう trap で必ず後始末する。
+        FETCH_TOKEN="${SOURCE_TOKEN:-}"
+        [ -z "$FETCH_TOKEN" ] && FETCH_TOKEN="$TOKEN"
+
+        CONFIGURED=0
+        cleanup() {
+          if [ "$CONFIGURED" = "1" ]; then
+            git config --global --unset-all url."https://github.com/".insteadOf 2>/dev/null || true
+          fi
+        }
+        trap cleanup EXIT
+
+        if [ -n "$FETCH_TOKEN" ]; then
+          git config --global url."https://x-access-token:${FETCH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          CONFIGURED=1
+        fi
+        export GH_TOKEN="$FETCH_TOKEN"
+        export GITHUB_TOKEN="$FETCH_TOKEN"
+
+        # 更新対象スキル名を配列化 (改行/カンマ/空白いずれの区切りも許容)
+        TARGETS=()
+        while IFS= read -r s; do
+          s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$s" ] && TARGETS+=("$s")
+        done < <(printf '%s' "${SKILLS:-}" | tr ',[:space:]' '\n')
+
+        # CLI パッケージ指定 (バージョン pin 可)
+        if [ -n "$SKILLS_VERSION" ]; then
+          PKG="skills@${SKILLS_VERSION}"
+        else
+          PKG="skills"
+        fi
+
+        # -p: project スコープのみ / -y: scope プロンプトを抑止
+        npx --yes "$PKG" update "${TARGETS[@]}" --project --yes
+
+    - name: Detect changes
+      id: detect
+      shell: bash
+      run: |
+        if git diff --quiet; then
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::スキルに更新はありません"
+        else
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Generate branch name
+      id: branch
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+      run: |
+        DATE=$(date -u +%Y%m%d)
+        echo "branch_name=${BRANCH_PREFIX}-${DATE}" >> "$GITHUB_OUTPUT"
+
+    - name: Build change summary
+      id: summary
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        LOCK_FILE: ${{ inputs.lock-file }}
+      run: |
+        set -euo pipefail
+        BEFORE_FILE="$RUNNER_TEMP/skills-lock.before.json"
+
+        # ロックファイルが無い (lock 管理外) 場合は git diff のファイル一覧でサマリ代替
+        if [ ! -f "$LOCK_FILE" ]; then
+          SUMMARY=$(git diff --name-only | sed 's/^/- `/;s/$/`/')
+          [ -z "$SUMMARY" ] && SUMMARY="- (変更サマリを生成できませんでした)"
+          {
+            echo 'summary<<SKILLS_EOF'
+            echo "$SUMMARY"
+            echo 'SKILLS_EOF'
+          } >> "$GITHUB_OUTPUT"
+          printf 'changed_skills<<SKILLS_NAMES_EOF\nSKILLS_NAMES_EOF\n' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # before/after の computedHash を比較し、差分のあったスキルだけを TSV で抽出
+        # (name<TAB>before-hash<TAB>after-hash)。追加/削除は欠損側が空文字。
+        DIFF_TSV=$(jq -rn \
+          --slurpfile before "$BEFORE_FILE" \
+          --slurpfile after "$LOCK_FILE" '
+            ($before[0].skills // {}) as $b
+            | ($after[0].skills // {}) as $a
+            | (($b | keys) + ($a | keys) | unique)[]
+            | . as $k
+            | ($b[$k].computedHash // "") as $bh
+            | ($a[$k].computedHash // "") as $ah
+            | select($bh != $ah)
+            | [$k, $bh, $ah] | @tsv')
+
+        SUMMARY=""
+        NAMES=""
+        while IFS=$'\t' read -r name bh ah; do
+          [ -z "$name" ] && continue
+          NAMES="${NAMES}${name}"$'\n'
+          if [ -z "$bh" ]; then
+            SUMMARY="${SUMMARY}- \`${name}\`: 追加 (→ $(echo "$ah" | cut -c1-7))"$'\n'
+          elif [ -z "$ah" ]; then
+            SUMMARY="${SUMMARY}- \`${name}\`: 削除 ($(echo "$bh" | cut -c1-7) →)"$'\n'
+          else
+            SUMMARY="${SUMMARY}- \`${name}\`: $(echo "$bh" | cut -c1-7) → $(echo "$ah" | cut -c1-7)"$'\n'
+          fi
+        done <<< "$DIFF_TSV"
+
+        if [ -z "$SUMMARY" ]; then
+          SUMMARY="- (変更サマリを生成できませんでした)"$'\n'
+        fi
+
+        {
+          echo 'summary<<SKILLS_EOF'
+          echo "$SUMMARY"
+          echo 'SKILLS_EOF'
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo 'changed_skills<<SKILLS_NAMES_EOF'
+          printf '%s' "$NAMES"
+          echo 'SKILLS_NAMES_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Commit and push branch
+      id: commit
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -euo pipefail
+
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+
+        ORIGINAL_REMOTE_URL=$(git remote get-url origin)
+        REMOTE_RESTORED=0
+        restore_remote() {
+          if [ "$REMOTE_RESTORED" = "0" ]; then
+            git remote set-url origin "$ORIGINAL_REMOTE_URL" || true
+            REMOTE_RESTORED=1
+          fi
+        }
+        trap restore_remote EXIT
+
+        case "$ORIGINAL_REMOTE_URL" in
+          https://*)
+            AUTH_URL="https://x-access-token:${GH_TOKEN}@${ORIGINAL_REMOTE_URL#https://}"
+            git remote set-url origin "$AUTH_URL"
+            ;;
+        esac
+
+        # 現在の HEAD (base-branch を checkout 済み) から新ブランチを作成し、
+        # skills update の作業ツリー変更を保持したままコミットする
+        git checkout -B "$BRANCH_NAME"
+        git add -A
+        git commit -m "$COMMIT_MESSAGE"
+
+        # actions/checkout は triggering ref しか fetch しないため、同日再実行時に
+        # リモート側の既存ブランチに対する remote-tracking ref が存在しない。
+        # --force-with-lease を機能させるため、push 前に明示的に fetch する
+        # (初回実行ではリモートに存在しないので失敗しても無視)。
+        git fetch origin "$BRANCH_NAME" 2>/dev/null || true
+        git push --force-with-lease origin "$BRANCH_NAME"
+
+    - name: Create or update PR
+      id: pr
+      if: steps.detect.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY_INPUT: ${{ inputs.pr-body }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        CHANGE_SUMMARY: ${{ steps.summary.outputs.summary }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$PR_BODY_INPUT" ]; then
+          BODY="$PR_BODY_INPUT"
+        else
+          BODY=$(printf '## スキル更新\n\n以下のエージェントスキルを最新に更新しました。\n\n%s\n\n---\n\nこの PR は `Fandhe-AI/actions/skills-update` により自動生成されています。\n' "$CHANGE_SUMMARY")
+        fi
+
+        EXISTING=$(gh pr list \
+          --head "$BRANCH_NAME" \
+          --state open \
+          --json number,url \
+          --jq '.[0]')
+
+        if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+          PR_NUMBER=$(echo "$EXISTING" | jq -r '.number')
+          PR_URL=$(echo "$EXISTING" | jq -r '.url')
+          gh pr edit "$PR_NUMBER" --title "$PR_TITLE" --body "$BODY"
+          echo "::notice::既存 PR を更新しました: $PR_URL"
+        else
+          CREATE_ARGS=(--head "$BRANCH_NAME" --base "$BASE_BRANCH" --title "$PR_TITLE" --body "$BODY")
+          if [ -n "$PR_LABELS" ]; then
+            IFS=',' read -ra LABEL_ARR <<< "$PR_LABELS"
+            for label in "${LABEL_ARR[@]}"; do
+              label_trimmed=$(echo "$label" | sed 's/^ *//;s/ *$//')
+              [ -n "$label_trimmed" ] && CREATE_ARGS+=(--label "$label_trimmed")
+            done
+          fi
+          PR_URL=$(gh pr create "${CREATE_ARGS[@]}")
+          echo "::notice::PR を作成しました: $PR_URL"
+        fi
+
+        echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+    - name: Auto-merge PR if allowed
+      id: automerge
+      if: steps.detect.outputs.has_changes == 'true' && steps.pr.outputs.pr_url != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_URL: ${{ steps.pr.outputs.pr_url }}
+        INPUT_AUTO_MERGE: ${{ inputs.auto-merge }}
+        INPUT_ALLOWLIST: ${{ inputs.auto-merge-allowlist }}
+        INPUT_STRATEGY: ${{ inputs.auto-merge-strategy }}
+        INPUT_FALLBACK: ${{ inputs.auto-merge-immediate-fallback }}
+        CHANGED_SKILLS: ${{ steps.summary.outputs.changed_skills }}
+      run: |
+        set -euo pipefail
+
+        # 既定は未マージ。マージ成功時のみ後から true で上書きする
+        # (GITHUB_OUTPUT は同一キーの後勝ち)。
+        echo "merged=false" >> "$GITHUB_OUTPUT"
+
+        # --- 1. 全体スイッチ判定 -------------------------------------------
+        # 注意: 空文字/null は「有効」に倒す。consumer が
+        # ${{ vars.SKILLS_AUTO_MERGE }} を渡し未設定=有効としたいため。
+        # 一方 input 既定値だけは 'false' なので、consumer が auto-merge を一切
+        # 渡さない場合は無効 = 既存互換挙動。この非対称は意図的。
+        switch="$(printf '%s' "${INPUT_AUTO_MERGE:-}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$switch" in
+          '' | true | yes | on | 1 | enabled | enable)
+            : # 自動マージ有効 (未設定含む)
+            ;;
+          false | no | off | 0 | disabled | disable)
+            echo "::notice::auto-merge=${INPUT_AUTO_MERGE} のため自動マージをスキップ"
+            echo "skipped_reason=disabled" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+          *)
+            # 解釈不能値はそのまま ::warning:: に埋め込まない (::command:: 注入防止)
+            echo "::warning::auto-merge の値を解釈できないため自動マージを無効化します"
+            echo "auto-merge=${INPUT_AUTO_MERGE}"
+            echo "skipped_reason=unparseable-switch" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+        esac
+
+        # --- 2. allowlist をパース (改行 / カンマ区切り → 配列) -------------
+        patterns=()
+        while IFS= read -r line; do
+          line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$line" ] && patterns+=("$line")
+        done < <(printf '%s' "${INPUT_ALLOWLIST:-}" | tr ',' '\n')
+
+        if [ "${#patterns[@]}" -eq 0 ]; then
+          allow_all=1
+          echo "::notice::allowlist 未指定 → 全スキルを自動マージ対象とします"
+        else
+          allow_all=0
+          # ${patterns[*]} を直接 echo せず printf で改行出力 (::command:: 注入防止)
+          printf '::notice::allowlist %d 件\n' "${#patterns[@]}"
+          printf '%s\n' "${patterns[@]}"
+        fi
+
+        # --- 3. 今回更新したスキル名集合 (summary が lock 差分から算出) -----
+        changed_skills=()
+        while IFS= read -r s; do
+          [ -n "$s" ] && changed_skills+=("$s")
+        done <<< "${CHANGED_SKILLS:-}"
+
+        # --- 4. glob マッチング (biome scanner 準拠) -----------------------
+        # glob を ERE に変換。* はセパレータ非跨ぎ、** は跨ぎ。
+        glob_to_regex() {
+          local glob="$1" out="" i=0 n=${#1} c nxt
+          while [ "$i" -lt "$n" ]; do
+            c="${glob:i:1}"
+            case "$c" in
+              '*')
+                nxt="${glob:i+1:1}"
+                if [ "$nxt" = '*' ]; then
+                  out+='.*'
+                  i=$((i + 2))
+                else
+                  out+='[^/]*'
+                  i=$((i + 1))
+                fi
+                ;;
+              '?')
+                out+='[^/]'
+                i=$((i + 1))
+                ;;
+              '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']' | '-' | \\)
+                out+="\\$c"
+                i=$((i + 1))
+                ;;
+              *)
+                out+="$c"
+                i=$((i + 1))
+                ;;
+            esac
+          done
+          printf '%s' "$out"
+        }
+
+        # name が allowlist で許可されるか (順次評価・last-match-wins)。
+        # 全パターンを順に見て、最後にマッチしたものが positive なら許可、
+        # negation (先頭 '!') なら不許可。どれにもマッチしなければ不許可。
+        is_allowed() {
+          local name="$1" decision=1 p neg glob re
+          for p in "${patterns[@]}"; do
+            if [ "${p:0:1}" = '!' ]; then
+              neg=1
+              glob="${p:1}"
+            else
+              neg=0
+              glob="$p"
+            fi
+            re="$(glob_to_regex "$glob")"
+            if [[ "$name" =~ ^${re}$ ]]; then
+              if [ "$neg" -eq 1 ]; then
+                decision=1
+              else
+                decision=0
+              fi
+            fi
+          done
+          return "$decision"
+        }
+
+        # --- 5. 判定 ------------------------------------------------------
+        if [ "$allow_all" -eq 1 ]; then
+          proceed=1
+        elif [ "${#changed_skills[@]}" -eq 0 ]; then
+          # allowlist 指定済みなのに変更スキルを特定できない → 安全側で手動
+          echo "::warning::更新スキルを特定できません。allowlist 指定時は安全のため自動マージをスキップします。"
+          echo "skipped_reason=unknown-skills" >> "$GITHUB_OUTPUT"
+          exit 0
+        else
+          proceed=1
+          for sk in "${changed_skills[@]}"; do
+            # name も別行に出力 (他箇所同様 ::command:: 注入を避ける)
+            if is_allowed "$sk"; then
+              echo "::notice::スキルは自動マージ許可"
+              printf '%s\n' "$sk"
+            else
+              echo "::notice::スキルは allowlist 対象外 → 手動レビュー"
+              printf '%s\n' "$sk"
+              proceed=0
+            fi
+          done
+        fi
+
+        if [ "$proceed" -ne 1 ]; then
+          echo "::notice::自動マージ条件を満たさないため手動レビュー対象として残します: ${PR_URL}"
+          echo "skipped_reason=not-allowlisted" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # --- 6. strategy / fallback の解釈 --------------------------------
+        strategy="$(printf '%s' "${INPUT_STRATEGY:-squash}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$strategy" in
+          squash | rebase | merge) : ;;
+          *)
+            echo "::warning::auto-merge-strategy を解釈できないため squash を使用します"
+            echo "auto-merge-strategy=${INPUT_STRATEGY}"
+            strategy='squash'
+            ;;
+        esac
+
+        fb="$(printf '%s' "${INPUT_FALLBACK:-true}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$fb" in
+          '' | true | yes | on | 1 | enabled | enable) fallback=1 ;;
+          *) fallback=0 ;;
+        esac
+
+        # --- 7. マージ実行 (auto-merge → 即時マージ フォールバック) --------
+        # $PR_URL は -- でフラグと区別。gh 出力 ($out) は別 echo 行に分離。
+        if out="$(gh pr merge -- "$PR_URL" --auto --"$strategy" 2>&1)"; then
+          echo "::notice::auto-merge を有効化しました: ${PR_URL}"
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+        elif [ "$fallback" -eq 1 ]; then
+          echo "::warning::auto-merge を有効化できません。即時 ${strategy} merge を試みます。"
+          echo "$out"
+          if out="$(gh pr merge -- "$PR_URL" --"$strategy" 2>&1)"; then
+            echo "::notice::即時 ${strategy} merge しました: ${PR_URL}"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::自動マージに失敗しました。"
+            echo "$out"
+            exit 1
+          fi
+        else
+          echo "::error::auto-merge を有効化できず、フォールバックも無効のため失敗します。"
+          echo "$out"
+          exit 1
+        fi
