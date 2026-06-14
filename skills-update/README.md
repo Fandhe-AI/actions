@@ -12,8 +12,9 @@
 - 呼び出しワークフローで `actions/checkout@v4` を実行済みであること
 - ランナーに Node.js / npx が利用可能であること（`ubuntu-latest` には標準搭載）
 - push と PR 作成に必要なトークンを用意
-  - スキルのソースが public: `GITHUB_TOKEN` (ワークフロー側で `contents: write` / `pull-requests: write` permission を付与)
+  - スキルのソースが public で、**生成 PR の CI 発火・auto-merge が不要**な場合: `GITHUB_TOKEN` (ワークフロー側で `contents: write` / `pull-requests: write` permission を付与)
   - private なソースリポジトリ（例: `Fandhe-AI/agent-cli-skills`）を含む場合: fine-grained PAT (contents: write / pull-requests: write、およびソースリポジトリへの read 権限)
+  - **生成 PR で後続 CI を走らせたい / 必須チェック付きで auto-merge したい場合**: `GITHUB_TOKEN` ではなく fine-grained PAT もしくは GitHub App トークン（`GITHUB_TOKEN` 起因の PR は後続 workflow をトリガーしない GitHub 仕様のため。後述の[注意事項](#注意事項)参照）
 
 ## セットアップ
 
@@ -47,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Fandhe-AI/actions/skills-update@<SHA> # main
         with:
-          token: ${{ secrets.SKILLS_PAT || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SKILLS_PAT }}
 ```
 
 #### 例2: 特定スキルのみを更新
@@ -55,7 +56,7 @@ jobs:
 ```yaml
 - uses: Fandhe-AI/actions/skills-update@<SHA> # main
   with:
-    token: ${{ secrets.SKILLS_PAT || secrets.GITHUB_TOKEN }}
+    token: ${{ secrets.SKILLS_PAT }}
     skills: 'create-commit, create-pr'
     pr-labels: 'dependencies,automated'
 ```
@@ -71,21 +72,59 @@ push/PR 用と、スキルソース取得用のトークンを分けたい場合
     source-token: ${{ secrets.SKILLS_SOURCE_PAT }}
 ```
 
+> この例は `auto-merge` を使わない構成のため push/PR 用に `GITHUB_TOKEN` を使えます。
+> `auto-merge` や生成 PR の CI 発火が必要な場合は `token` を PAT / GitHub App トークンに
+> 変えてください（[注意事項](#注意事項)参照）。
+
 #### 例4: 自動マージを有効化（`vars` で制御）
 
 PR 作成後、条件を満たせば自動的にマージできます。ON/OFF と allowlist は repository
 variables で制御し、ワークフロー側はそれを渡すだけで済みます。
 
+> **重要**: `auto-merge` を使うなら `token` に `GITHUB_TOKEN` を渡さないでください。
+> `GITHUB_TOKEN` で作成した PR は後続 workflow（CI）を発火しないため、必須チェック付き
+> auto-merge がキューに残り続けるか、未検証のまま merge されます（[注意事項](#注意事項)参照）。
+> fine-grained PAT または GitHub App トークンを使ってください。
+
 ```yaml
 - name: Update skills and open PR
   uses: Fandhe-AI/actions/skills-update@<SHA> # main
   with:
-    token: ${{ secrets.SKILLS_PAT || secrets.GITHUB_TOKEN }}
+    token: ${{ secrets.SKILLS_PAT }}
     base-branch: main
     auto-merge: ${{ vars.SKILLS_AUTO_MERGE }}
     auto-merge-allowlist: ${{ vars.SKILLS_AUTO_MERGE_ALLOWLIST }}
     auto-merge-strategy: squash
 ```
+
+#### 例5: GitHub App トークンで CI を発火させつつ auto-merge
+
+`actions/create-github-app-token` で発行した App トークンを使うと、生成 PR が後続 CI を
+発火するため、必須ステータスチェック付きの auto-merge を正しくキューできます。
+
+```yaml
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/create-github-app-token@<SHA>
+        id: app-token
+        with:
+          app-id: ${{ vars.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+      - uses: Fandhe-AI/actions/skills-update@<SHA> # main
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          auto-merge: ${{ vars.SKILLS_AUTO_MERGE }}
+          auto-merge-allowlist: ${{ vars.SKILLS_AUTO_MERGE_ALLOWLIST }}
+```
+
+> private なスキルソースの取得には別途 `source-token` に read 権限付き PAT を渡してください
+> （App トークンがソースリポジトリにアクセスできない場合）。
 
 repository variables（Settings → Secrets and variables → Actions → Variables）:
 
@@ -104,7 +143,7 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 
 | 名前 | 必須 | デフォルト | 説明 |
 |---|---|---|---|
-| `token` | Yes | - | push と PR 作成に使うトークン (contents: write, pull-requests: write) |
+| `token` | Yes | - | push と PR 作成に使うトークン (contents: write, pull-requests: write)。**生成 PR で CI を発火 / auto-merge する場合は `GITHUB_TOKEN` 不可**、fine-grained PAT または GitHub App トークンを渡す |
 | `source-token` | No | `` (token を流用) | private なスキルソースリポジトリの取得に使うトークン |
 | `base-branch` | No | `main` | PR の向き先ブランチ |
 | `branch-prefix` | No | `chore/skills-update` | 自動生成するブランチ名の prefix。最終ブランチ名は `{prefix}-{YYYYMMDD}` (UTC) |
@@ -172,6 +211,7 @@ git ls-remote https://github.com/Fandhe-AI/actions.git HEAD
 - `skills-version` を指定しない場合は `skills` CLI の latest を都度取得します。再現性が必要なら明示的に pin してください
 - `base-branch` に branch protection がある場合、PR マージには追加のレビュー設定が必要
 - 同名ブランチに人間が直接 push している場合、`--force-with-lease` が失敗する可能性があります。自動更新専用のブランチ prefix を維持してください
-- **auto-merge に渡す token は fine-grained PAT（`contents: write` + `pull-requests: write`）を推奨**します。`gh pr merge --auto` を使うにはリポジトリの "Allow auto-merge" 設定が必要です（無効でも `auto-merge-immediate-fallback: true` なら即時マージにフォールバックします）
+- **`GITHUB_TOKEN` で作成した PR は後続 workflow（`pull_request` トリガーの CI 等）を発火しません**（GitHub の再帰防止仕様）。このため `token: ${{ secrets.GITHUB_TOKEN }}` のまま `auto-merge` を使うと、(1) branch protection で必須ステータスチェックを要求している場合はチェックが永遠に走らず auto-merge した PR がキューに残り続ける、(2) 必須チェックが無い場合は CI 未実行のまま merge される、という不具合が起きます。**生成 PR で CI を走らせたい / 必須チェック付きで auto-merge したい場合は、fine-grained PAT もしくは `actions/create-github-app-token` で発行した GitHub App トークンを渡してください**（例5 参照）。本 Action は `auto-merge` 有効時に `GITHUB_TOKEN`（API ログインが `github-actions[bot]`）を検出すると `::warning::` を出します
+- **auto-merge に渡す token は fine-grained PAT（`contents: write` + `pull-requests: write`）または GitHub App トークンを推奨**します。`gh pr merge --auto` を使うにはリポジトリの "Allow auto-merge" 設定が必要です（無効でも `auto-merge-immediate-fallback: true` なら即時マージにフォールバックします）
 - `auto-merge-immediate-fallback`（既定 `true`）が有効な場合、`--auto` が使えない環境では**必須チェックやレビューの完了を待たずに即時マージ**します。レビューや CI を必須にしたい場合は `base-branch` に branch protection（required status checks / required reviews）を設定するか、`auto-merge-immediate-fallback: false` を指定してください
 - `auto-merge` の既定値は `false`（input を渡さなければ従来どおり自動マージしない）ですが、**空文字を渡すと「有効」** に解釈されます。`${{ vars.SKILLS_AUTO_MERGE }}` を渡して「variable 未設定＝有効」とする運用を想定した非対称です
