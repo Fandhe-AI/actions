@@ -9,7 +9,10 @@ self-hosted runner 上で rustup を自己修復し、リポジトリの `rust-t
 - **単一真実源**: ツールチェーンのチャネル・components は `rust-toolchain.toml` に委ね、
   `rustup show` で同期する（toolchain 指定 input は意図的に設けない）
 - **追加コンポーネント**: ジョブ固有のコンポーネント（例: カバレッジ用
-  `llvm-tools-preview`）は `components` input で追加できる（導入済みならスキップ）
+  `llvm-tools-preview`）は `components` input で追加できる。インストール済み一覧が
+  「ベース名 + ホスト三つ組」かつ preview は `-preview` なしで列挙される仕様を
+  踏まえ、正規化した候補名との厳密一致で導入済みを判定してスキップする（冪等。
+  ホスト三つ組を取得できない場合は判定を諦めて `rustup component add` に倒す）
 
 ## 前提条件
 

@@ -39,8 +39,12 @@ runs:
 
     # 呼び出し側ジョブ固有の追加コンポーネント（例: カバレッジ用 llvm-tools-preview）を
     # 導入する。導入済みならスキップする（冪等）。インストール済み一覧は
-    # ターゲット付き名（例: llvm-tools-x86_64-unknown-linux-gnu）で列挙されるため
-    # 前方一致で判定する。
+    # 「ベース名 + ホスト三つ組」（例: llvm-tools-x86_64-unknown-linux-gnu）で列挙され、
+    # preview コンポーネントは `-preview` なしの名前で列挙されるため、正規化した
+    # 候補名（そのまま / ホスト付き / -preview を剥いだ形とそのホスト付き）との
+    # 厳密一致で判定する（前方一致だと rust-docs が rust-docs-json-<host> に
+    # 誤一致する等の問題があるため）。ホスト三つ組の取得に失敗した場合は
+    # スキップ判定を諦めて rustup component add へ倒す（add は導入済みなら冪等）。
     - name: Ensure additional components
       env:
         COMPONENTS: ${{ inputs.components }}
@@ -50,6 +54,7 @@ runs:
         [ -z "${COMPONENTS}" ] && exit 0
         IFS=',' read -r -a components <<< "${COMPONENTS}"
         installed="$(rustup component list --installed)"
+        host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)"
         for raw in ${components[@]+"${components[@]}"}; do
           component="$(printf '%s' "${raw}" | xargs)"
           [ -z "${component}" ] && continue
@@ -57,7 +62,25 @@ runs:
             echo "::error::不正なコンポーネント名です: ${component}"
             exit 1
           fi
-          if ! printf '%s\n' "${installed}" | grep -q "^${component}"; then
+          candidates=("${component}")
+          if [ -n "${host}" ]; then
+            candidates+=("${component}-${host}")
+          fi
+          if [[ "${component}" == *-preview ]]; then
+            base="${component%-preview}"
+            candidates+=("${base}")
+            if [ -n "${host}" ]; then
+              candidates+=("${base}-${host}")
+            fi
+          fi
+          found=false
+          for candidate in "${candidates[@]}"; do
+            if printf '%s\n' "${installed}" | grep -qxF -- "${candidate}"; then
+              found=true
+              break
+            fi
+          done
+          if [ "${found}" = false ]; then
             rustup component add "${component}"
           fi
         done
