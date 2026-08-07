@@ -1,0 +1,63 @@
+name: Rust Toolchain Setup
+description: >-
+  self-hosted runner 上で rustup を自己修復（未導入・破損時のみ非対話インストール）し、
+  リポジトリの rust-toolchain.toml にツールチェーンを同期する
+
+inputs:
+  components:
+    description: >-
+      追加でインストールする rustup コンポーネント（カンマ区切り。例: llvm-tools-preview）。
+      rust-toolchain.toml の components に既に列挙済みのものは指定不要
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # self-hosted runner の永続環境に rustup が未導入、または残骸だけが残って
+    # 実行不能（破損）な場合に備え、後続の「Sync toolchain」の前提
+    # （rustup show の実行可否）を自己修復する。健全な導入済み環境では
+    # 何もしない（冪等・追加コストほぼゼロ）。導入時は非対話・HTTPS 検証込みで
+    # 取得し、既定ツールチェーンは rust-toolchain.toml に委ねる（none 指定）。
+    - name: Ensure rustup is installed
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v rustup >/dev/null 2>&1 || ! rustup --version >/dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+        fi
+
+    # rustup show はカレントディレクトリの rust-toolchain.toml を検出し、
+    # 指定チャネル・components を未導入なら自動インストールする
+    # （rust-toolchain.toml を単一真実源とするため、toolchain 指定 input は設けない）。
+    - name: Sync toolchain (rust-toolchain.toml)
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup show
+
+    # 呼び出し側ジョブ固有の追加コンポーネント（例: カバレッジ用 llvm-tools-preview）を
+    # 導入する。導入済みならスキップする（冪等）。インストール済み一覧は
+    # ターゲット付き名（例: llvm-tools-x86_64-unknown-linux-gnu）で列挙されるため
+    # 前方一致で判定する。
+    - name: Ensure additional components
+      env:
+        COMPONENTS: ${{ inputs.components }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        [ -z "${COMPONENTS}" ] && exit 0
+        IFS=',' read -r -a components <<< "${COMPONENTS}"
+        installed="$(rustup component list --installed)"
+        for raw in ${components[@]+"${components[@]}"}; do
+          component="$(printf '%s' "${raw}" | xargs)"
+          [ -z "${component}" ] && continue
+          if ! printf '%s\n' "${component}" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "::error::不正なコンポーネント名です: ${component}"
+            exit 1
+          fi
+          if ! printf '%s\n' "${installed}" | grep -q "^${component}"; then
+            rustup component add "${component}"
+          fi
+        done
