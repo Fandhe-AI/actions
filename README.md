@@ -7,6 +7,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | アクション | 説明 |
 |---|---|
 | [cargo-tool-install](cargo-tool-install/) | cargo ツールをバージョン固定（`--locked`）・冪等にインストールする |
+| [rust-toolchain-setup](rust-toolchain-setup/) | self-hosted runner 上で rustup を自己修復し、`rust-toolchain.toml` にツールチェーンを同期する |
 | [post-comment](post-comment/) | Issue または PR にコメントを投稿する |
 | [idempotent-issue](idempotent-issue/) | ラベルを冪等に作成し、同一検索条件の open Issue が存在しない場合のみ Issue を起票する |
 | [project-sync](project-sync/) | Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する |
@@ -28,11 +29,21 @@ steps:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-最新の SHA は以下で取得できます：
+reusable workflow（`codex-review` / `pages-deploy`）も同様に SHA で固定します：
+
+```yaml
+jobs:
+  deploy:
+    uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+```
+
+最新の SHA は以下で取得できます（本リポジトリは private のため、認証済み gh CLI で解決します）：
 
 ```bash
-git ls-remote https://github.com/Fandhe-AI/actions.git HEAD
+gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 ```
+
+タグ・ブランチ名（`@main` / `@v1`）での参照は可変であり、参照先が差し替わりうるため使用しません。
 
 ## 前提条件
 
