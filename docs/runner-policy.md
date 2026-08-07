@@ -73,6 +73,9 @@ jobs:
   - ジョブユーザーに passwordless sudo を与えない
   - 信頼できないリポジトリへ runner を共有しない
 
+ホステッドランナー既定（public）のリポジトリが例外を適用する際の条件・wrapper の書き方・
+例外が及ばない範囲は [`codex-review-runner-exception.md`](codex-review-runner-exception.md) にまとめている。
+
 この例外は codex-review の codex 実行ジョブ（`runner-label`、既定値 `codex`）に限る。
 PR コメント投稿など資格情報に触れないジョブ（`post-feedback-runner-label`）は、上表の方針どおり
 呼び出し側の可視性に従う。ただし既定値が `self-hosted` であるため、**public リポジトリから
@@ -99,6 +102,7 @@ Composite Action であり、private リポジトリ側での利用を想定し�
 
 ## 関連
 
+- [`codex-review-runner-exception.md`](codex-review-runner-exception.md)
 - [`codex-review/README.md`](../codex-review/README.md)
 - [`pages-deploy/README.md`](../pages-deploy/README.md)
 - [`rust-toolchain-setup/README.md`](../rust-toolchain-setup/README.md)

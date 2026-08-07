@@ -21,6 +21,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | ドキュメント | 説明 |
 |---|---|
 | [docs/runner-policy.md](docs/runner-policy.md) | 組織 runner 方針（public は GitHub ホステッド / private は self-hosted、対象リポジトリ一覧、codex-review 例外） |
+| [docs/codex-review-runner-exception.md](docs/codex-review-runner-exception.md) | codex-review runner 例外の適用ガイド（適用条件の担保責任、public 向け wrapper、例外が及ばない範囲、消費側規約からの参照方法） |
 
 ## 使い方
 
