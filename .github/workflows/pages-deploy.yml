@@ -95,12 +95,17 @@ jobs:
         env:
           DIST_DIR: ${{ inputs.dist-dir }}
         run: |
-          case "/${DIST_DIR}/" in
-            //*|*/../*|*/./*)
-              echo "::error::不正な dist-dir です: ${DIST_DIR}（絶対パス・.. ・. セグメントを拒否。artifact ルートを指す場合は \".\" を指定）"
-              exit 1
-              ;;
-          esac
+          # "." 単体は「artifact ルートをそのまま公開ルートにする」正当な指定として
+          # 明示的に許可する（README・inputs 説明が案内する最頻ケース。case 検査へ
+          # 通すと "/./" が */./* に一致して誤拒否されるため先に分岐する）
+          if [ "${DIST_DIR}" != "." ]; then
+            case "/${DIST_DIR}/" in
+              //*|*/../*|*/./*)
+                echo "::error::不正な dist-dir です: ${DIST_DIR}（絶対パス・.. ・. セグメントを拒否。artifact ルートを指す場合は \".\" を指定）"
+                exit 1
+                ;;
+            esac
+          fi
           site_root="${RUNNER_TEMP}/pages-dist/${DIST_DIR}"
           if [ ! -d "${site_root}" ]; then
             echo "::error::artifact 内に dist-dir が見つかりません: ${DIST_DIR}（upload-artifact の path と dist-dir の対応を確認してください）"
