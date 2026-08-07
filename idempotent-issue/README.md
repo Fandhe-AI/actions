@@ -121,7 +121,7 @@ permissions:
 
 ```bash
 # actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは private のため、認証済み gh CLI で解決する）
+# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
 gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 # ワークフロー内の SHA を新しい値に置き換え
@@ -148,5 +148,6 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 - **並行実行の競合**: 同一条件の起票が複数ジョブで厳密に同時実行された場合、
   検索と起票の間の競合により稀に重複しえます（GitHub API にアトミックな
   「検索して未存在なら作成」がないため）。concurrency グループでの直列化を推奨します
-- **`actions` リポジトリのアクセス**: org の Settings → Actions → General で
-  プライベートリポジトリからの Action 共有を許可する必要あり
+- **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
+  ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
+  利用が制限されている場合は許可が必要

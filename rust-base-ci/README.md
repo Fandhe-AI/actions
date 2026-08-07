@@ -50,8 +50,9 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
    `cargo deny check` 自体は呼び出し側の `rust-toolchain.toml` の toolchain で実行される
 3. runner が利用可能であること。private リポジトリは self-hosted、public リポジトリは
    GitHub ホステッド（`ubuntu-latest` 等）を `runner-label` で指定する
-4. private リポジトリから利用する場合、org の **Settings → Actions → General** で
-   Action / workflow の共有が許可されていること
+4. 本リポジトリ（`Fandhe-AI/actions`）は public のため、workflow 共有（提供側）の設定は
+   不要。ただし利用側の org / リポジトリの **Settings → Actions → General** で外部
+   Action / workflow の利用が制限されている場合は許可が必要
 
 ## セットアップ
 

@@ -58,7 +58,7 @@ reusable workflow も同様に SHA 固定で参照する:
 uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
 ```
 
-最新 SHA の取得（private リポジトリのため認証済み gh CLI を使う）:
+最新 SHA の取得（本リポジトリは public のため、未認証の GitHub API でも取得できる）:
 
 ```bash
 gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'

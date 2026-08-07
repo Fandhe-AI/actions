@@ -47,7 +47,7 @@ jobs:
     uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
 ```
 
-最新の SHA は以下で取得できます（本リポジトリは private のため、認証済み gh CLI で解決します）：
+最新の SHA は以下で取得できます（本リポジトリは public のため、未認証の GitHub API でも取得できます）：
 
 ```bash
 gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
@@ -57,7 +57,7 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 ## 前提条件
 
-- プライベートリポジトリから利用する場合、org の **Settings → Actions → General** で Action 共有を許可する必要あり
+- 本リポジトリは public のため、Action 共有（提供側）の設定は不要。ただし利用側の org / リポジトリの **Settings → Actions → General** で外部 Action の利用が制限されている場合は許可が必要
 - 各アクションに必要なトークン権限は個別の README を参照
 
 ## 新しいアクションの追加

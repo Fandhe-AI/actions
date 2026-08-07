@@ -99,7 +99,7 @@ jobs:
 
 ```bash
 # actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは private のため、認証済み gh CLI で解決する）
+# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
 gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 # ワークフロー内の SHA を新しい値に置き換え
@@ -109,4 +109,4 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 - **PAT の有効期限**: fine-grained PAT は最大1年。定期ローテーション推奨
 - **PAT 発行者の異動・退職**: 再発行が必要
-- **`actions` リポジトリのアクセス**: org の Settings → Actions → General でプライベートリポジトリからの Action 共有を許可する必要あり
+- **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の利用が制限されている場合は許可が必要

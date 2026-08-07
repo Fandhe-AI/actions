@@ -127,7 +127,7 @@ Status オプション名がデフォルトと異なる場合は inputs で指�
 
 ```bash
 # actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは private のため、認証済み gh CLI で解決する）
+# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
 gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 # ワークフロー内の SHA を新しい値に置き換え
@@ -138,4 +138,4 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 - **PAT の有効期限**: fine-grained PAT は最大1年。定期ローテーション推奨
 - **ビルトインワークフローとの併用**: Project の built-in ワークフロー（closed→Done, merged→Done）と二重発火するが、同じ値への更新なので実害なし
 - **PR ライフサイクル**: built-in は closed/merged のみ。opened→In Progress, review_requested→In Review はこの Action でのみ自動化可能
-- **`actions` リポジトリのアクセス**: org の Settings → Actions → General でプライベートリポジトリからの Action 共有を許可する必要あり
+- **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の利用が制限されている場合は許可が必要
