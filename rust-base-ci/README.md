@@ -12,9 +12,11 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
   組織方針の両方から利用できる
 - **`Cargo.toml` 不在リポジトリでは安全に skip する**（ジョブは `success` のまま終了し
   CI を落とさない）。`cargo deny` は `deny.toml` も揃っている場合のみ実行する
-- rustup セットアップは [`rust-toolchain-setup`](../rust-toolchain-setup/)、`cargo-deny`
-  の導入は [`cargo-tool-install`](../cargo-tool-install/) に委譲し、**バージョン固定・冪等・
-  runner のグローバル状態を汚さない**方針を 1 箇所へ集約している
+- rustup セットアップは [`rust-toolchain-setup`](../rust-toolchain-setup/) に委譲し、
+  **バージョン固定・冪等・runner のグローバル状態を汚さない**方針を 1 箇所へ集約している。
+  `cargo-deny` はバージョン固定・冪等のインライン導入とし、**呼び出し側の
+  `rust-toolchain.toml` とは独立した stable ツールチェーンでビルドする**
+  （`cargo-deny` の MSRV が呼び出し側の固定チャネルより新しい場合の失敗を避けるため）
 - 使用する外部 action はすべてコミット SHA 固定
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
   通常不要なため既定は無効
@@ -41,7 +43,11 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
    不在」の runner では既定ツールチェーンが決まらず `cargo` が失敗する
    （移行元 `ci.yml` の `--default-toolchain stable` からの挙動差分）
 2. `cargo deny` を有効にする場合、リポジトリルートに `deny.toml` が存在すること
-   （不在時は `deny` ジョブが `success` のまま skip される）
+   （不在時は `deny` ジョブが `success` のまま skip される）。`cargo-deny` 本体は
+   `rust-toolchain.toml` の固定チャネルではなく、`deny` ジョブが別途導入する **stable**
+   でビルドされる（`cargo-deny` 0.20.x の MSRV は 1.88.0 であり、呼び出し側がそれより
+   古いチャネルを固定していてもインストールが失敗しないようにするため）。
+   `cargo deny check` 自体は呼び出し側の `rust-toolchain.toml` の toolchain で実行される
 3. runner が利用可能であること。private リポジトリは self-hosted、public リポジトリは
    GitHub ホステッド（`ubuntu-latest` 等）を `runner-label` で指定する
 4. private リポジトリから利用する場合、org の **Settings → Actions → General** で
@@ -119,7 +125,7 @@ with:
 |---|---|---|---|
 | `runner-label` | - | `self-hosted` | 全ジョブを実行する runner ラベル（public は `ubuntu-latest` 等） |
 | `deny-checks` | - | `advisories licenses sources` | `cargo deny check` に渡すチェック名（空白区切り）。`advisories` / `bans` / `licenses` / `sources` のみ許容し、それ以外は fail-closed で拒否 |
-| `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（`cargo-tool-install` が厳密一致で検証する） |
+| `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
 | `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
@@ -141,7 +147,7 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 呼び出し側の `uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@<SHA>` を更新する。
 
 本 workflow が内部で参照する **本リポジトリ内の action**
-（`rust-toolchain-setup` / `cargo-tool-install`）は、相対参照
+（`rust-toolchain-setup`）は、相対参照
 （`uses: ./rust-toolchain-setup`）が**呼び出し側リポジトリのチェックアウト**を指してしまう
 ため使えず、`Fandhe-AI/actions/<action>@<SHA>` 形式で固定している。この SHA は本ファイル
 追加前の main の SHA である（自分自身のコミット SHA は作成時点で存在しない）。参照先の
