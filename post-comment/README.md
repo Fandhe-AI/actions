@@ -99,7 +99,7 @@ jobs:
 
 ```bash
 # actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは private のため、認証済み gh CLI で解決する）
+# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
 gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 # ワークフロー内の SHA を新しい値に置き換え
