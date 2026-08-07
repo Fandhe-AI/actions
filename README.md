@@ -14,6 +14,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | [submodule-update](submodule-update/) | git submodule を最新に追従させ、変更があれば PR を自動作成する |
 | [skills-update](skills-update/) | `npx skills` で導入したエージェントスキルを最新に更新し、変更があれば PR を自動作成する |
 | [codex-review](codex-review/) | OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
+| [rust-base-ci](rust-base-ci/) | Rust のベースライン品質ゲート（`cargo fmt` / `clippy` / `test` / `deny`。reusable workflow。runner は inputs で指定、`Cargo.toml` 不在時は安全に skip） |
 | [pages-deploy](pages-deploy/) | GitHub Pages への deploy（reusable workflow。呼び出し側 build ジョブの dist を artifact で受け取り、Pages artifact 変換〜deploy まで担う） |
 
 ## ドキュメント
