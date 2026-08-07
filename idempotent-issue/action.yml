@@ -55,18 +55,43 @@ runs:
       run: |
         set -euo pipefail
 
-        # ラベルは冪等に作成する（既存でも --force で失敗させない）。
-        # gh の一時障害でラベル作成に失敗しても、重複判定・起票の本処理は
-        # 続行する（警告のみ。移植元の ci.yml dep-audit / bench-schedule.yml と同挙動）。
-        label_args=(--force)
-        if [ -n "${LABEL_COLOR}" ]; then
-          label_args+=(--color "${LABEL_COLOR}")
+        # ラベルは冪等に用意する。既存ラベルへ無条件に `--force` を使うと、
+        # color 未指定時に gh がランダム色を選び直し実行のたびにラベル色が変異する
+        # （非冪等）ため、存在確認で分岐する:
+        # - 既存: color / description が明示されている場合のみ、その項目だけを
+        #   `gh label edit` で更新する（未指定なら何もしない）
+        # - 未存在: `gh label create` で新規作成する（並行実行との race で失敗しても
+        #   警告のみで続行）
+        # gh の一時障害でラベル処理（存在確認・作成・更新）に失敗しても、重複判定・
+        # 起票の本処理は続行する（警告のみ。移植元の ci.yml dep-audit /
+        # bench-schedule.yml の「ラベル作成失敗は警告のみ」方針と整合）。
+        if label_names="$(gh label list --limit 1000 --json name --jq '.[].name')"; then
+          if printf '%s\n' "${label_names}" | grep -qxF "${LABEL}"; then
+            edit_args=()
+            if [ -n "${LABEL_COLOR}" ]; then
+              edit_args+=(--color "${LABEL_COLOR}")
+            fi
+            if [ -n "${LABEL_DESCRIPTION}" ]; then
+              edit_args+=(--description "${LABEL_DESCRIPTION}")
+            fi
+            if [ "${#edit_args[@]}" -gt 0 ]; then
+              gh label edit "${LABEL}" "${edit_args[@]}" \
+                || echo "警告: ラベル ${LABEL} の更新に失敗しました（本処理は続行します）" >&2
+            fi
+          else
+            create_args=()
+            if [ -n "${LABEL_COLOR}" ]; then
+              create_args+=(--color "${LABEL_COLOR}")
+            fi
+            if [ -n "${LABEL_DESCRIPTION}" ]; then
+              create_args+=(--description "${LABEL_DESCRIPTION}")
+            fi
+            gh label create "${LABEL}" ${create_args[@]+"${create_args[@]}"} \
+              || echo "警告: ラベル ${LABEL} の作成に失敗しました（本処理は続行します）" >&2
+          fi
+        else
+          echo "警告: ラベル一覧の取得に失敗したためラベル処理をスキップします（本処理は続行します）" >&2
         fi
-        if [ -n "${LABEL_DESCRIPTION}" ]; then
-          label_args+=(--description "${LABEL_DESCRIPTION}")
-        fi
-        gh label create "${LABEL}" "${label_args[@]}" \
-          || echo "警告: ラベル ${LABEL} の作成に失敗しました（本処理は続行します）" >&2
 
         # 重複起票防止: 同一検索条件 + 同一ラベルの open Issue が既にあれば起票しない。
         # 検索クエリはデータとして渡し、シェル再解釈やコマンド置換に埋め込まない

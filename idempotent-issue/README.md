@@ -3,8 +3,11 @@
 ラベルの冪等な作成 → 重複検索 → 未存在時のみ Issue を起票する Composite Action。
 
 CI からの自動 Issue 起票（監査検知・性能退行検知など）で頻出する
-「`gh label create --force` → `gh issue list --search` で open Issue の重複を確認 →
+「ラベルの冪等な用意 → `gh issue list --search` で open Issue の重複を確認 →
 未存在なら `gh issue create --body-file`」のパターンを一般化しています。
+ラベルは存在確認のうえ、未存在なら `gh label create` で作成し、既存なら
+`label-color` / `label-description` が明示されている場合のみ `gh label edit` で
+該当項目だけを更新します（未指定なら既存ラベルに触れず、色が変異しません）。
 同一検索条件 + 同一ラベルの open Issue が既にある場合は起票せずスキップし、
 何度実行しても Issue が重複しません（冪等）。
 
@@ -128,7 +131,11 @@ git ls-remote https://github.com/Fandhe-AI/actions.git HEAD
 - **重複判定の粒度**: 「`search-query` に一致し、かつ `label` が付いた open Issue」の有無で
   判定します。closed Issue は対象外のため、既存 Issue をクローズすると次回検知時に再起票されます
   （検知の再通知として意図した挙動）
-- **ラベル作成の失敗は警告のみ**: `gh label create --force` が gh の一時障害で失敗しても
+- **ラベルも冪等に扱う**: 既存ラベルは `label-color` / `label-description` が明示された
+  場合のみ該当項目を `gh label edit` で更新し、未指定なら一切変更しません
+  （無条件 `--force` 作成だと color 未指定時に gh がランダム色を選び直し、実行のたびに
+  ラベル色が変わってしまうため）
+- **ラベル処理の失敗は警告のみ**: ラベルの存在確認・作成・更新が gh の一時障害で失敗しても
   本処理（重複判定・起票）は続行します。一方、**重複検索の失敗はフェイルクローズ**で
   ステップを異常終了させます（検索失敗時に起票を強行すると重複起票のリスクがあるため）
 - **`search-query` はデータとして渡される**: 入力値は `env:` 経由でシェル変数に渡し、
