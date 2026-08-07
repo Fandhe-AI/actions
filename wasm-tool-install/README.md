@@ -93,7 +93,8 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
     add-to-path: 'false'
 
 - name: Run
-  run: "${INSTALL_DIR}/wasm-bindgen" --version
+  run: |
+    "${INSTALL_DIR}/wasm-bindgen" --version
   env:
     INSTALL_DIR: ${{ steps.wb.outputs.install-dir }}
 ```
@@ -125,11 +126,17 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 curl -sSfL https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.126/wasm-bindgen-0.2.126-x86_64-unknown-linux-musl.tar.gz.sha256sum
 ```
 
-`wasm-pack` は併載がないため、取得して自分で計算します：
+`wasm-pack` は併載がないため、取得して自分で計算します
+（macOS には `sha256sum` が無いため `shasum -a 256` を使います）：
 
 ```bash
+# Linux
 curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
   | sha256sum
+
+# macOS
+curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
+  | shasum -a 256
 ```
 
 ## Action の SHA 固定と更新方法
