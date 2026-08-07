@@ -11,7 +11,6 @@ CI からの自動 Issue 起票（監査検知・性能退行検知など）で�
 ## 前提条件
 
 - `gh` CLI が runner に導入済み（GitHub ホステッド runner は導入済み。self-hosted runner は要確認）
-- `jq` が runner に導入済み
 - トークンに対象リポジトリの Issues Read/Write 権限があること
   - 同一リポジトリなら `${{ github.token }}`（既定値）で可。ジョブに `issues: write` の
     permissions が必要

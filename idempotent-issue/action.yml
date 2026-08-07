@@ -72,16 +72,19 @@ runs:
         # 検索クエリはデータとして渡し、シェル再解釈やコマンド置換に埋め込まない
         # （コマンドインジェクション対策）。検索自体が失敗した場合は、重複起票の
         # リスクを避けるためフェイルクローズで異常終了する。
-        existing_json="$(gh issue list \
+        # JSON の加工は外部 jq バイナリではなく gh 内蔵の --jq で行い（bash + gh CLI
+        # のみの規約）、検索結果の揺れを避けるため gh 呼び出しは 1 回に留めて
+        # 先頭 Issue の「番号 TAB URL」（0 件なら空文字）を導出する。
+        existing="$(gh issue list \
           --search "${SEARCH_QUERY}" \
           --state open \
           --label "${LABEL}" \
-          --json number,url)"
-        existing_count="$(printf '%s' "${existing_json}" | jq 'length')"
+          --json number,url \
+          --jq '.[0] // empty | [.number, .url] | @tsv')"
 
-        if [ "${existing_count}" != "0" ]; then
-          existing_number="$(printf '%s' "${existing_json}" | jq -r '.[0].number')"
-          existing_url="$(printf '%s' "${existing_json}" | jq -r '.[0].url')"
+        if [ -n "${existing}" ]; then
+          existing_number="${existing%%$'\t'*}"
+          existing_url="${existing#*$'\t'}"
           echo "既存 open Issue があるため起票をスキップします: #${existing_number} (${existing_url})"
           {
             echo "created=false"
