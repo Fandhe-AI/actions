@@ -1,0 +1,411 @@
+name: Rust base CI (reusable)
+
+# Rust リポジトリのベースライン品質ゲート（fmt / clippy / test / cargo-deny）を共通化する
+# reusable workflow。Fandhe-AI/local-llm-server・Fandhe-AI/rust-ai-library の ci.yml が
+# ほぼ同型で重複していたものを workflow_call 化して集約したもの（イシュー #28）。
+#
+#   jobs:
+#     rust-ci:
+#       permissions:
+#         contents: read
+#       uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@<SHA> # main
+#       with:
+#         runner-label: self-hosted
+#
+# 設計の要点:
+# - runner は runner-label 入力で呼び出し元から指定する（組織方針: public リポジトリは
+#   ubuntu ホステッド / private リポジトリは self-hosted。イシュー #33）
+# - Cargo.toml 検出ガード: Checkout 直後の detect ステップで Cargo.toml の有無を判定し、
+#   以降のステップを `if: steps.detect.outputs.has_cargo == 'true'` でスキップする
+#   （ジョブ自体は success のまま終了し CI を落とさない自己修復方式）。ジョブ単位の `if:`
+#   ではなく各ステップの `if:` で判定しているのは、`jobs.<id>.if` が Checkout 前
+#   （ワークスペース展開前）に評価されるため hashFiles('Cargo.toml') が常に空文字となり
+#   判定できないため
+# - ジョブ単位の enable/disable 入力は設けない。ジョブを skip させると集約ジョブ
+#   （rust-base-ci-complete）の fail-closed 判定（result != success で失敗）に引っかかり、
+#   skip を例外扱いする追加機構が必要になるため。ジョブ構成の増減は呼び出し側の
+#   独自ジョブで行う
+# - コマンドの自由記述入力（fmt-args / clippy-args 等）は設けない。移行元 2 リポジトリで
+#   差分がなく、`run:` 内での非クォート展開（単語分割）というシェル注入面だけが増えるため。
+#   唯一差分のある deny-checks は閉じた whitelist との厳密一致で fail-closed 検証する
+# - rustup セットアップは rust-toolchain-setup action、cargo ツール導入は
+#   cargo-tool-install action に委譲する（バージョン固定・冪等・runner のグローバル状態を
+#   汚さない方針を 1 箇所へ集約）
+# - concurrency は reusable workflow のトップレベルでは機能しないため呼び出し側で設定する
+#   （README のセットアップ例参照）
+#
+# 前提: 呼び出し側リポジトリに rust-toolchain.toml が存在すること。rust-toolchain-setup は
+# rustup を `--default-toolchain none` で導入し rust-toolchain.toml を単一真実源とするため、
+# 「rustup 未導入かつ rust-toolchain.toml 不在」の runner では既定ツールチェーンが決まらない
+# （移行元 ci.yml の `--default-toolchain stable` からの挙動差分。README の前提条件参照）。
+
+on:
+  workflow_call:
+    inputs:
+      runner-label:
+        description: >-
+          全ジョブを実行する runner ラベル（public リポジトリは ubuntu-latest 等、
+          private リポジトリは self-hosted。組織方針はイシュー #33 参照）
+        type: string
+        required: false
+        default: self-hosted
+      deny-checks:
+        description: >-
+          `cargo deny check` に渡すチェック名（空白区切り）。
+          advisories / bans / licenses / sources のみ許容し、それ以外は fail-closed で拒否する
+        type: string
+        required: false
+        default: advisories licenses sources
+      cargo-deny-version:
+        description: cargo-deny の固定バージョン（cargo-tool-install へ渡す。厳密一致で検証される）
+        type: string
+        required: false
+        default: 0.20.2
+      cache:
+        description: >-
+          cargo レジストリ・target ディレクトリの cache を有効にする（オプトイン）。
+          workspace が永続する self-hosted runner では通常不要なため既定は false
+        type: boolean
+        required: false
+        default: false
+      cache-key-prefix:
+        description: cache key の接頭辞（同一 runner を共有する複数リポジトリでの衝突回避用）
+        type: string
+        required: false
+        default: rust-base-ci
+      fmt-timeout-minutes:
+        description: fmt ジョブの timeout（分）
+        type: number
+        required: false
+        default: 10
+      clippy-timeout-minutes:
+        description: clippy ジョブの timeout（分）
+        type: number
+        required: false
+        default: 30
+      test-timeout-minutes:
+        description: test ジョブの timeout（分）
+        type: number
+        required: false
+        default: 30
+      deny-timeout-minutes:
+        description: deny ジョブの timeout（分）
+        type: number
+        required: false
+        default: 20
+
+# reusable workflow のジョブが必要とする最小権限。呼び出し側が付与した権限を絞る方向にしか
+# 働かないため、呼び出し側の `uses:` ジョブ（またはワークフロー）にも contents: read が必要。
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------
+  # cargo fmt --check（整形差分の検出）
+  # --------------------------------------------------
+  fmt:
+    name: cargo fmt --check
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.fmt-timeout-minutes }}
+    steps:
+      - name: Checkout
+        # actions/checkout v6.0.3。persist-credentials: false: checkout 後どのステップも
+        # GITHUB_TOKEN を使わないため、既定の .git/config への認証情報永続化を無効化し、
+        # 共有 self-hosted runner の workspace にトークンを残留させない。
+        # submodules は既定（false）のまま: fmt/clippy/test/deny に不要。
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Cargo.toml の有無を判定
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "Cargo.toml" ]; then
+            echo "has_cargo=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_cargo=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Cargo.toml が無いため cargo fmt --check をスキップしました"
+          fi
+
+      # cache は Cargo.lock のハッシュを key に含めるため、Cargo.toml 不在時は
+      # hashFiles が空文字になり全 key が接頭辞へ潰れる。detect ガード下に置く。
+      - name: Restore cargo cache
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-fmt-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-fmt-
+
+      # rustup の自己修復（未導入・破損時のみ非対話インストール）と rust-toolchain.toml への
+      # 同期、rustfmt component の冪等追加を担う。
+      # 相対参照（uses: ./rust-toolchain-setup）は「呼び出し側リポジトリのチェックアウト」を
+      # 参照するため本 workflow では使えず、必ず <owner>/<repo>/<path>@<ref> 形式で指す。
+      # ref に指定しているのは本ファイル追加前の main の SHA（自分自身のコミット SHA は
+      # 作成時点で存在しない鶏卵問題のため）。参照先 action を更新した際は各 SHA を
+      # 手動で追随させる（README の「SHA の更新方法」参照）。
+      - name: Setup Rust toolchain (rustfmt)
+        if: steps.detect.outputs.has_cargo == 'true'
+        uses: Fandhe-AI/actions/rust-toolchain-setup@cafbcd7c1d339dcfb27017a4e941220810c33b0a # main
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        if: steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+
+  # --------------------------------------------------
+  # cargo clippy -- -D warnings（lint ゲート）
+  # --all-features を指定し、feature が増えた際にも既定で全 feature を lint 対象にする。
+  # --------------------------------------------------
+  clippy:
+    name: cargo clippy
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.clippy-timeout-minutes }}
+    steps:
+      - name: Checkout
+        # persist-credentials: false（fmt ジョブと同一方針）。
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Cargo.toml の有無を判定
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "Cargo.toml" ]; then
+            echo "has_cargo=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_cargo=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Cargo.toml が無いため cargo clippy をスキップしました"
+          fi
+
+      - name: Restore cargo cache
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-
+
+      - name: Setup Rust toolchain (clippy)
+        if: steps.detect.outputs.has_cargo == 'true'
+        uses: Fandhe-AI/actions/rust-toolchain-setup@cafbcd7c1d339dcfb27017a4e941220810c33b0a # main
+        with:
+          components: clippy
+
+      - name: cargo clippy --workspace --all-targets --all-features
+        if: steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # --------------------------------------------------
+  # cargo test（ユニット・結合・doc test）。
+  # 実機依存テストは呼び出し側で #[ignore] 分離されている前提であり、本ジョブでは実行しない。
+  # --------------------------------------------------
+  test:
+    name: cargo test
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.test-timeout-minutes }}
+    steps:
+      - name: Checkout
+        # persist-credentials: false（fmt ジョブと同一方針）。
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Cargo.toml の有無を判定
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "Cargo.toml" ]; then
+            echo "has_cargo=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_cargo=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Cargo.toml が無いため cargo test をスキップしました"
+          fi
+
+      - name: Restore cargo cache
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-
+
+      - name: Setup Rust toolchain
+        if: steps.detect.outputs.has_cargo == 'true'
+        uses: Fandhe-AI/actions/rust-toolchain-setup@cafbcd7c1d339dcfb27017a4e941220810c33b0a # main
+
+      - name: cargo test --workspace --all-features
+        if: steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace --all-features
+
+  # --------------------------------------------------
+  # cargo deny check（RUSTSEC アドバイザリ監査・依存ライセンス互換性・レジストリ供給元監査）。
+  # deny.toml が無い状態で cargo-deny の組み込み既定を適用してしまわないよう、
+  # Cargo.toml と deny.toml の双方が存在する場合のみ実行する。
+  # --------------------------------------------------
+  deny:
+    name: cargo deny check
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.deny-timeout-minutes }}
+    steps:
+      - name: Checkout
+        # persist-credentials: false（fmt ジョブと同一方針）。
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      # deny-checks の入力検証（fail-closed）。空白区切りトークンを閉じた whitelist と
+      # 厳密一致で照合し、許容外の値は実行前に失敗させる。検証済みトークンのみを配列へ
+      # 詰め直し、後段の cargo deny へは "${checks[@]}" で展開する（元入力文字列を
+      # コマンドラインへ非クォートで展開しない）。検証結果は $GITHUB_OUTPUT 経由で
+      # 実行ステップへ渡す。
+      - name: deny-checks の検証
+        id: validate
+        env:
+          DENY_CHECKS: ${{ inputs.deny-checks }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed=(advisories bans licenses sources)
+          # read は 1 行しか読まないため、改行区切りで渡された場合に 2 行目以降が
+          # 黙って落ちないよう空白へ正規化してから配列化する。
+          read -r -a requested <<< "$(printf '%s' "${DENY_CHECKS}" | tr '\n\r\t' '   ')"
+          if [ "${#requested[@]}" -eq 0 ]; then
+            echo "::error::deny-checks が空です（advisories / bans / licenses / sources から 1 つ以上指定してください）"
+            exit 1
+          fi
+          validated=()
+          for check in "${requested[@]}"; do
+            ok=false
+            for candidate in "${allowed[@]}"; do
+              if [ "${check}" = "${candidate}" ]; then
+                ok=true
+                break
+              fi
+            done
+            if [ "${ok}" = false ]; then
+              echo "::error::deny-checks に許容外の値が含まれています（許容: advisories / bans / licenses / sources）"
+              echo "指定値: ${check}"
+              exit 1
+            fi
+            validated+=("${check}")
+          done
+          echo "checks=${validated[*]}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cargo.toml と deny.toml の有無を判定
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "Cargo.toml" ] && [ -f "deny.toml" ]; then
+            echo "has_deny=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_deny=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Cargo.toml または deny.toml が無いため cargo deny をスキップしました"
+          fi
+
+      - name: Restore cargo cache
+        if: inputs.cache && steps.detect.outputs.has_deny == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-deny-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-deny-
+
+      - name: Setup Rust toolchain
+        if: steps.detect.outputs.has_deny == 'true'
+        uses: Fandhe-AI/actions/rust-toolchain-setup@cafbcd7c1d339dcfb27017a4e941220810c33b0a # main
+
+      # 移行元 ci.yml の `cargo install cargo-deny --locked`（バージョン非固定）を
+      # バージョン固定・冪等の共通 action へ置き換える（導入済みなら何もしない）。
+      - name: Ensure cargo-deny
+        if: steps.detect.outputs.has_deny == 'true'
+        uses: Fandhe-AI/actions/cargo-tool-install@cafbcd7c1d339dcfb27017a4e941220810c33b0a # main
+        with:
+          tool: cargo-deny
+          version: ${{ inputs.cargo-deny-version }}
+
+      # --locked で Cargo.lock の意図しない書き換え・runner 汚染を防止する。
+      # CHECKS は直前ステップで whitelist 検証済みのトークン列（意図的に非クォート展開）。
+      - name: cargo deny check
+        if: steps.detect.outputs.has_deny == 'true'
+        env:
+          CHECKS: ${{ steps.validate.outputs.checks }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a checks <<< "${CHECKS}"
+          cargo deny --locked check "${checks[@]}"
+
+  # --------------------------------------------------
+  # 完遂判定用の集約ジョブ。branch protection / ruleset の required status check には
+  # 本ジョブ（呼び出し側から見た名前は `<呼び出し側 job id> / rust-base-ci-complete`）を
+  # 指定すればよい。呼び出し側が独自ジョブを持つ場合、本ジョブからは参照できないため
+  # 呼び出し側でも同型の集約ジョブが必要（README の注意事項参照）。
+  # --------------------------------------------------
+  rust-base-ci-complete:
+    name: rust-base-ci-complete
+    runs-on: ${{ inputs.runner-label }}
+    # 失敗・スキップ時にも必ず実行して fail-closed で判定する
+    # （bare needs は skipped も success 扱いになるため、明示的に result を検査する）。
+    if: ${{ always() }}
+    needs: [fmt, clippy, test, deny]
+    timeout-minutes: 5
+    steps:
+      - name: 完遂判定（全 needs ジョブが success であること）
+        env:
+          RESULT_FMT: ${{ needs.fmt.result }}
+          RESULT_CLIPPY: ${{ needs.clippy.result }}
+          RESULT_TEST: ${{ needs.test.result }}
+          RESULT_DENY: ${{ needs.deny.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=1
+          for pair in "fmt:${RESULT_FMT}" "clippy:${RESULT_CLIPPY}" "test:${RESULT_TEST}" "deny:${RESULT_DENY}"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "${result}" != "success" ]; then
+              echo "NG: ${name} = ${result}"
+              ok=0
+            fi
+          done
+          if [ "${ok}" -ne 1 ]; then
+            echo "一部ジョブが success ではありません" >&2
+            exit 1
+          fi
+          echo "全ジョブ success"
