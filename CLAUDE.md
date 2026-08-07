@@ -24,6 +24,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | ディレクトリ | 形態 | 用途 |
 |---|---|---|
 | `cargo-tool-install/` | Composite Action | cargo ツールのバージョン固定（`--locked`）・冪等インストール |
+| `rust-toolchain-setup/` | Composite Action | self-hosted runner 上での rustup 自己修復と `rust-toolchain.toml` へのツールチェーン同期（`components` で追加コンポーネントを冪等インストール） |
 | `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
 | `idempotent-issue/` | Composite Action | ラベル冪等作成 → 重複検索 → 未存在時のみ Issue 起票（`gh label create` / `gh issue list` / `gh issue create`） |
 | `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
@@ -46,6 +47,18 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 
 ```yaml
 uses: Fandhe-AI/actions/post-comment@<SHA> # main
+```
+
+reusable workflow も同様に SHA 固定で参照する:
+
+```yaml
+uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+```
+
+最新 SHA の取得（private リポジトリのため認証済み gh CLI を使う）:
+
+```bash
+gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 ```
 
 ## README 規約
