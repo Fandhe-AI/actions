@@ -1,0 +1,82 @@
+name: Cargo Tool Install
+description: cargo ツールをバージョン固定（--locked）・冪等にインストールする
+
+inputs:
+  tool:
+    description: 'crates.io のクレート名（例: cargo-nextest, cargo-deny, oha）'
+    required: true
+  version:
+    description: '固定するバージョン（例: 0.9.137。厳密一致で判定する）'
+    required: true
+  binary-name:
+    description: >-
+      導入後に呼び出すコマンド名。省略時はクレート名と同じ。
+      `cargo-` 始まりの場合はサブコマンド形式（`cargo <name> --version`）で確認する
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure cargo tool (version pinned, idempotent)
+      env:
+        TOOL: ${{ inputs.tool }}
+        VERSION: ${{ inputs.version }}
+        BINARY_NAME: ${{ inputs.binary-name }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # 入力の形式検証（fail-closed）。env 経由で受け取った値のみを使い、
+        # コマンド位置・引数位置に渡す前に許容文字を制限する。
+        if ! printf '%s' "${TOOL}" | grep -qE '^[0-9A-Za-z_-]+$'; then
+          echo "::error::tool が不正です（英数字・ハイフン・アンダースコアのみ許容）: ${TOOL}"
+          exit 1
+        fi
+        if ! printf '%s' "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([0-9A-Za-z.+-]*)?$'; then
+          echo "::error::version が不正です（semver 形式のみ許容）: ${VERSION}"
+          exit 1
+        fi
+        if [ -n "${BINARY_NAME}" ] && ! printf '%s' "${BINARY_NAME}" | grep -qE '^[0-9A-Za-z_-]+$'; then
+          echo "::error::binary-name が不正です（英数字・ハイフン・アンダースコアのみ許容）: ${BINARY_NAME}"
+          exit 1
+        fi
+
+        binary="${BINARY_NAME:-${TOOL}}"
+
+        # `cargo-<sub>` クレートは cargo サブコマンド形式で呼び出す
+        # （例: cargo-nextest → `cargo nextest --version`）。それ以外は
+        # スタンドアロンバイナリとして直接呼び出す（例: oha → `oha --version`）。
+        if [[ "${binary}" == cargo-* ]]; then
+          cmd=(cargo "${binary#cargo-}")
+        else
+          cmd=("${binary}")
+        fi
+
+        # 導入済みバージョンの取得。未導入（コマンド不在）・バージョン取得失敗は
+        # 空文字にフォールバックし、後段の厳密一致判定で「要インストール」へ倒す。
+        get_installed_version() {
+          "${cmd[@]}" --version 2>/dev/null \
+            | head -n 1 \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' \
+            | head -n 1 \
+            || true
+        }
+
+        installed="$(get_installed_version)"
+        if [ "${installed}" = "${VERSION}" ]; then
+          echo "${TOOL} ${VERSION} は導入済み。インストールをスキップします"
+          exit 0
+        fi
+
+        echo "${TOOL}@${VERSION} をインストールします（現在: ${installed:-未導入}）"
+        cargo install --locked "${TOOL}@${VERSION}"
+
+        # インストール後の厳密一致検証（fail-closed）。PATH 上の別バイナリが
+        # 優先される等で期待バージョンにならない環境不整合をここで検知する。
+        installed="$(get_installed_version)"
+        if [ "${installed}" != "${VERSION}" ]; then
+          echo "::error::インストール後の ${binary} のバージョンが期待値と一致しません（期待: ${VERSION} / 実際: ${installed:-取得失敗}）"
+          exit 1
+        fi
+        echo "${TOOL} ${VERSION} のインストールが完了しました"

@@ -23,6 +23,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 
 | ディレクトリ | 形態 | 用途 |
 |---|---|---|
+| `cargo-tool-install/` | Composite Action | cargo ツールのバージョン固定（`--locked`）・冪等インストール |
 | `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
 | `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
 | `submodule-update/` | Composite Action | git submodule を最新に追従させ、変更があれば PR を自動作成 |
