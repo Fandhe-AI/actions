@@ -1,6 +1,6 @@
 # Fandhe-AI/actions
 
-Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions。
+Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・reusable workflow。
 
 ## アクション一覧
 
@@ -10,6 +10,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions。
 | [project-sync](project-sync/) | Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する |
 | [submodule-update](submodule-update/) | git submodule を最新に追従させ、変更があれば PR を自動作成する |
 | [skills-update](skills-update/) | `npx skills` で導入したエージェントスキルを最新に更新し、変更があれば PR を自動作成する |
+| [codex-review](codex-review/) | OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
 
 ## 使い方
 
@@ -40,3 +41,5 @@ git ls-remote https://github.com/Fandhe-AI/actions.git HEAD
 1. ディレクトリを作成（lowercase + hyphen: `action-name/`）
 2. `action.yml` と `README.md` を配置
 3. Composite Action（bash + `gh` CLI）で実装
+4. 複数ジョブ・runner 選択・permissions 分離が必要な場合は reusable workflow
+   （`.github/workflows/<name>.yml` + `<name>/` に付随ファイルと README）として実装
