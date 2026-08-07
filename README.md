@@ -16,6 +16,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | [codex-review](codex-review/) | OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
 | [rust-base-ci](rust-base-ci/) | Rust のベースライン品質ゲート（`cargo fmt` / `clippy` / `test` / `deny`。reusable workflow。runner は inputs で指定、`Cargo.toml` 不在時は安全に skip） |
 | [pages-deploy](pages-deploy/) | GitHub Pages への deploy（reusable workflow。呼び出し側 build ジョブの dist を artifact で受け取り、Pages artifact 変換〜deploy まで担う） |
+| [lint-docs](lint-docs/) | ドキュメント／設定ファイル系 lint（reusable workflow。markdownlint・editorconfig-checker・yamllint・commitlint を個別に切替可能、reviewdog 対応は opt-in、runner は呼び出し元指定） |
 
 ## ドキュメント
 
