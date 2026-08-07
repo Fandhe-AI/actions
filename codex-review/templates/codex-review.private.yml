@@ -1,0 +1,28 @@
+# private リポジトリ向け wrapper テンプレート。
+# 呼び出し側リポジトリの .github/workflows/codex-review.yml へコピーし、<SHA> を差し替える。
+# 導入手順は Fandhe-AI/actions の codex-review/README.md「セットアップ」を参照。
+name: Codex PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# reusable workflow のトップレベル concurrency は機能しないため呼び出し側で設定する
+concurrency:
+  group: codex-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  codex-review:
+    # <SHA> は Fandhe-AI/actions のコミット SHA で固定する（@main 不可）
+    uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA> # main
+    permissions:
+      contents: read
+      pull-requests: write
+    # private リポジトリでは runner 既定値（codex ジョブ: codex / コメント投稿ジョブ:
+    # self-hosted）が組織 runner 方針に合致するため、runner ラベルの指定は不要。
+    # 詳細は docs/runner-policy.md を参照。

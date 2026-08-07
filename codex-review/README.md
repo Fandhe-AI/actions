@@ -24,47 +24,98 @@ OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の�
 2. runner からレジストリ `registry.npmjs.org` への外向き通信が可能であること
    （workflow がジョブ内で `@openai/codex` をバージョン固定インストールする。
    runner イメージへの codex / Node.js の常設インストールは不要）
-3. `gh` 等の追加ツールは不要（`actions/github-script` でコメント投稿する）
+3. 導入先リポジトリが codex 専用 runner の **runner group から利用を許可**されていること
+   （org 運用時。未許可だとジョブが runner 待ちのまま進まない）
+4. `gh` 等の追加ツールは不要（`actions/github-script` でコメント投稿する）
 
 ## セットアップ
 
-### 1. Actions variable の設定（有効化スイッチ）
+新規リポジトリへ展開する際は、以下を上から順に実施する。
 
-org または リポジトリの Actions variable `CODEX_HOME_DIR` に、runner 上の
-`CODEX_HOME` マウント先パス（例: `/opt/codex-home`）を設定する。
-**未設定の間は全ジョブが skip される**（fail-closed。設定が唯一の有効化操作）。
+### 1. codex 専用 runner を利用可能にする
 
-### 2. wrapper ワークフローの設置
+runner 本体が未構築なら「runner 構築」章に従って用意する。構築済みの場合でも、
+runner group に**導入先リポジトリを追加**しないとジョブが runner を掴めず待ち続ける。
 
-呼び出し側リポジトリに `.github/workflows/codex-review.yml` を作成する:
+```bash
+# 対象 runner group を確認する
+gh api orgs/Fandhe-AI/actions/runner-groups --jq '.runner_groups[] | {id, name, visibility}'
 
-```yaml
-name: Codex PR review
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main]
-
-# reusable workflow のトップレベル concurrency は機能しないため呼び出し側で設定する
-concurrency:
-  group: codex-review-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
-
-jobs:
-  codex-review:
-    uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA> # main
-    permissions:
-      contents: read
-      pull-requests: write
+# runner group へ導入先リポジトリを追加する
+gh api -X PUT "orgs/Fandhe-AI/actions/runner-groups/<GROUP_ID>/repositories/<REPO_ID>"
+# <REPO_ID> は gh api repos/Fandhe-AI/<repo> --jq '.id' で取得する
 ```
 
-`<SHA>` は本リポジトリのコミット SHA で固定する（`@main` 不可。SHA の更新方法は後述）。
+runner group は**信頼できるリポジトリのみ**に開放する（「注意事項」参照）。
 
-### 3. レビュー基準のカスタマイズ（任意）
+### 2. Actions variable `CODEX_HOME_DIR` を設定する（有効化スイッチ）
+
+runner 上の `CODEX_HOME` マウント先パス（例: `/opt/codex-home`）を Actions variable
+`CODEX_HOME_DIR` に設定する。**未設定の間は codex ジョブが skip される**
+（fail-closed。設定が唯一の有効化操作）。
+
+```bash
+# リポジトリ単位で設定する場合
+gh variable set CODEX_HOME_DIR --repo Fandhe-AI/<repo> --body /opt/codex-home
+
+# org 単位で、許可したリポジトリにだけ見せる場合
+gh variable set CODEX_HOME_DIR --org Fandhe-AI --body /opt/codex-home \
+  --visibility selected --repos <repo1>,<repo2>
+
+# 確認（値が空でないこと）
+gh variable list --repo Fandhe-AI/<repo>
+```
+
+### 3. wrapper ワークフローをコピーする
+
+`codex-review/templates/` の wrapper テンプレートを、導入先リポジトリの
+`.github/workflows/codex-review.yml` としてコピーする。**リポジトリの可視性で選ぶ**:
+
+| 導入先の可視性 | コピーするテンプレート | 理由 |
+|---|---|---|
+| private | [`templates/codex-review.private.yml`](templates/codex-review.private.yml) | runner 既定値（`codex` / `self-hosted`）が組織 runner 方針に合致する |
+| public | [`templates/codex-review.public.yml`](templates/codex-review.public.yml) | `post-feedback-runner-label` の既定値 `self-hosted` が方針に反するため `ubuntu-latest` を明示する |
+
+```bash
+# 導入先リポジトリのルートで実行（private の場合。public は .public.yml に読み替える）
+mkdir -p .github/workflows
+gh api -H 'Accept: application/vnd.github.raw' \
+  repos/Fandhe-AI/actions/contents/codex-review/templates/codex-review.private.yml \
+  > .github/workflows/codex-review.yml
+```
+
+本リポジトリのローカルチェックアウトがあれば `cp` でも同じ結果になる。
+runner 選択の根拠は [`docs/runner-policy.md`](../docs/runner-policy.md) を参照。
+
+### 4. `<SHA>` を固定する
+
+テンプレートの `uses:` は `@<SHA>` のままなので、本リポジトリのコミット SHA へ置換する
+（`@main` 不可）:
+
+```bash
+SHA="$(gh api repos/Fandhe-AI/actions/commits/main --jq '.sha')"
+perl -pi -e "s/\@<SHA>/\@${SHA}/" .github/workflows/codex-review.yml
+```
+
+置換後、`uses:` 行に 40 桁の SHA が入っていることを目視確認してからコミットする。
+
+### 5. 動作確認（skip されていないことの確認）
+
+codex ジョブは `CODEX_HOME_DIR` 未設定時と fork からの PR で **skip** される。
+**skip されたジョブはワークフロー全体では成功扱いに見える**ため、初回導入時は必ず
+ジョブ単位で実行結果を確認する。
+
+```bash
+# 導入先リポジトリで PR を 1 本作ったうえで実行する
+gh run list --repo Fandhe-AI/<repo> --workflow "Codex PR review" --limit 1
+gh run view <run-id> --repo Fandhe-AI/<repo> --json jobs \
+  --jq '.jobs[] | {name, status, conclusion}'
+```
+
+`codex` ジョブの `conclusion` が `skipped` でなく、PR に「Codex PR レビュー」コメントが
+投稿されていれば導入完了。`skipped` の場合は「注意事項」のトラブルシューティングを参照。
+
+### 6. レビュー基準のカスタマイズ（任意）
 
 何も置かなければ同梱既定版（`codex-review/prompts/review.md` の汎用レビュー基準）で動く。
 リポジトリ固有の基準を使う場合は、以下を base ブランチへコミットする:
@@ -154,6 +205,9 @@ wrapper の `uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA>` �
 同梱既定 prompt / schema は wrapper が固定した SHA と同一コミットから読まれるため、
 SHA 更新で workflow 本体と既定制御ファイルが常に一緒に切り替わる。
 
+`inputs` の追加・既定値変更が入った場合は `codex-review/templates/` の wrapper
+テンプレートも更新されるため、SHA 更新時にテンプレートとの差分も確認する。
+
 ## 注意事項
 
 - **auth.json はパスワード同等**。コミット・ログ・チケットへ貼らない。トークン値は
@@ -169,3 +223,15 @@ SHA 更新で workflow 本体と既定制御ファイルが常に一緒に切り
   protection 設定次第。`CODEX_HOME_DIR` 未設定時はジョブが skip されるため、required 化
   する場合は skip との両立（skip を成功扱いにするか等）を呼び出し側で設計すること
 - レビューはセキュリティ境界ではない。最終判断は人間レビューが担う
+
+### トラブルシューティング
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| codex ジョブが `skipped`（PR コメントも出ない） | `CODEX_HOME_DIR` 未設定、または fork からの PR | セットアップ 2 で variable を設定する。fork PR は仕様上実行しない |
+| ジョブが `Waiting for a runner` のまま進まない | 導入先リポジトリが runner group に未追加、または `runner-label` に一致する runner が無い | セットアップ 1 で runner group へ追加する。ラベルは `runner-label` の値（既定 `codex`）と一致させる |
+| `sudo -n true` の fail-closed 検証で失敗する | ジョブ実行ユーザーが passwordless sudo を持っている | runner のジョブユーザーを sudoers から外す（「runner 構築」参照） |
+| `bwrap: No permissions to create a new namespace` | unprivileged user namespace が禁止されている | seccomp / AppArmor プロファイルで userns 作成を許可する（「runner 構築」参照） |
+| `@openai/codex` のインストールに失敗する | runner から `registry.npmjs.org` へ到達できない | runner のネットワーク・プロキシ設定を確認する |
+| 認証エラーでレビューが失敗する | `CODEX_HOME` の refresh token 失効、または `auth.json` が read-only マウント | ホストで `codex login --device-auth` を再実行し、read-write マウントであることを確認する |
+| public リポジトリでコメント投稿ジョブが runner 待ちになる | `post-feedback-runner-label` が既定値 `self-hosted` のまま | public 用テンプレートを使い `ubuntu-latest` を渡す |
