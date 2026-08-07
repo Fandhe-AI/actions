@@ -1,0 +1,246 @@
+name: WASM Tool Install
+description: >-
+  wasm-bindgen-cli / wasm-pack のプリビルトバイナリを、バージョン固定 + SHA256 検証 +
+  atomic install（mv -T）で冪等に導入する
+
+inputs:
+  tool:
+    description: '導入するツール（wasm-bindgen / wasm-pack のいずれか）'
+    required: true
+  version:
+    description: >-
+      固定するバージョン（semver、`v` 接頭辞なし。例: wasm-bindgen なら 0.2.126、
+      wasm-pack なら 0.13.1）。release tag への変換はアクション側で行う
+    required: true
+  sha256:
+    description: >-
+      配布 tarball の SHA256 チェックサム（64 桁 hex）。不一致の場合は
+      インストールせず失敗する（fail-closed）
+    required: true
+  target:
+    description: 'release asset の target triple（例: x86_64-unknown-linux-musl）'
+    required: false
+    default: x86_64-unknown-linux-musl
+  install-root:
+    description: >-
+      インストール先のルート絶対パス。実際の配置先は
+      `<install-root>/<tool>/<version>-<target>` になる
+    required: false
+    default: ''
+  add-to-path:
+    description: "配置先を $GITHUB_PATH へ追加するか（true / false）"
+    required: false
+    default: 'true'
+
+outputs:
+  install-dir:
+    description: バイナリを配置したディレクトリの絶対パス
+    value: ${{ steps.install.outputs.install-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install WASM tool (pinned + checksum-verified, atomic install)
+      id: install
+      env:
+        TOOL: ${{ inputs.tool }}
+        VERSION: ${{ inputs.version }}
+        SHA256: ${{ inputs.sha256 }}
+        TARGET: ${{ inputs.target }}
+        INSTALL_ROOT: ${{ inputs.install-root }}
+        ADD_TO_PATH: ${{ inputs.add-to-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # 入力の形式検証（fail-closed）。値はすべて env 経由で受け取り、
+        # パス・URL・引数位置へ渡す前に許容文字を制限する。
+        # エラー出力は workflow command 注入を避けるため、`::error::` 行には
+        # 静的な文言のみを置き、ユーザー由来の値は別 echo 行へ分離する。
+        case "${TOOL}" in
+          wasm-bindgen|wasm-pack) ;;
+          *)
+            echo "::error::tool が不正です（wasm-bindgen / wasm-pack のみ許容）"
+            echo "受け取った tool: ${TOOL}"
+            exit 1
+            ;;
+        esac
+        if ! printf '%s' "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$'; then
+          echo "::error::version が不正です（semver 形式・v 接頭辞なしのみ許容）"
+          echo "受け取った version: ${VERSION}"
+          exit 1
+        fi
+        if ! printf '%s' "${SHA256}" | grep -qE '^[0-9a-fA-F]{64}$'; then
+          echo "::error::sha256 が不正です（64 桁の 16 進数のみ許容）"
+          exit 1
+        fi
+        if ! printf '%s' "${TARGET}" | grep -qE '^[0-9A-Za-z_][0-9A-Za-z_.-]*$'; then
+          echo "::error::target が不正です（target triple として許容されない文字を含みます）"
+          echo "受け取った target: ${TARGET}"
+          exit 1
+        fi
+        case "${ADD_TO_PATH}" in
+          true|false) ;;
+          *)
+            echo "::error::add-to-path が不正です（true / false のみ許容）"
+            echo "受け取った add-to-path: ${ADD_TO_PATH}"
+            exit 1
+            ;;
+        esac
+
+        # install-root 未指定時は $HOME/.local/share を既定とする。
+        # inputs の default 値は式コンテキストで評価されるため $HOME を解決できない。
+        # そのため default は空文字にし、ここでシェル側でフォールバックする。
+        install_root="${INSTALL_ROOT:-${HOME}/.local/share}"
+        case "${install_root}" in
+          /*) ;;
+          *)
+            echo "::error::install-root は絶対パスで指定してください"
+            echo "受け取った install-root: ${install_root}"
+            exit 1
+            ;;
+        esac
+
+        # ツールごとの差分テーブル。release tag の付け方・展開後ディレクトリ名・
+        # 「揃っていることを確認すべきバイナリの組」だけがツール間の差分である。
+        # 供給元は rustwasm org の GitHub Releases に固定し、任意 URL は受け付けない。
+        case "${TOOL}" in
+          wasm-bindgen)
+            tag="${VERSION}"
+            stem="wasm-bindgen-${VERSION}-${TARGET}"
+            # wasm-bindgen-cli は本体と test-runner が組で揃っている必要がある
+            # （片方だけ存在する不完全な導入を検知するため両方を検証対象にする）。
+            binaries=(wasm-bindgen wasm-bindgen-test-runner)
+            ;;
+          wasm-pack)
+            tag="v${VERSION}"
+            stem="wasm-pack-v${VERSION}-${TARGET}"
+            binaries=(wasm-pack)
+            ;;
+        esac
+        archive="${stem}.tar.gz"
+        url="https://github.com/rustwasm/${TOOL}/releases/download/${tag}/${archive}"
+
+        # 配置先はバージョン + target を含む不変パスにする。共有 $HOME を持つ
+        # self-hosted runner で複数ジョブが並列実行されても、異なるバージョン /
+        # アーキテクチャが同一パスを奪い合わない。
+        share_dir="${install_root}/${TOOL}"
+        target_dir="${share_dir}/${VERSION}-${TARGET}"
+        mkdir -p "${share_dir}"
+
+        # 配置済み判定は「組のすべてが実行可能であること」で行う（部分 install を
+        # 導入済みとみなさない）。
+        is_installed() {
+          local b
+          for b in "${binaries[@]}"; do
+            [ -x "${target_dir}/${b}" ] || return 1
+          done
+          return 0
+        }
+
+        # SHA256 の照合。sha256sum が無い環境（macOS runner 等）では shasum -a 256 を使う。
+        verify_checksum() {
+          local file="$1"
+          if command -v sha256sum >/dev/null 2>&1; then
+            printf '%s  %s\n' "${SHA256}" "${file}" | sha256sum -c -
+          elif command -v shasum >/dev/null 2>&1; then
+            printf '%s  %s\n' "${SHA256}" "${file}" | shasum -a 256 -c -
+          else
+            echo "::error::SHA256 を検証できません（sha256sum / shasum のいずれも見つかりません）"
+            return 1
+          fi
+        }
+
+        if is_installed; then
+          echo "${TOOL} ${VERSION} (${TARGET}) は導入済み。ダウンロードをスキップします"
+        else
+          echo "${TOOL} ${VERSION} (${TARGET}) を導入します"
+          echo "ダウンロード元: ${url}"
+
+          # 一時ディレクトリは配置先と同一ファイルシステム上（share_dir 配下）に作る。
+          # 別 FS だと後段の mv が rename ではなくコピーになり atomic 性が失われる。
+          tmp_root="$(mktemp -d "${share_dir}/.tmp-XXXXXX")"
+          trap 'rm -rf "${tmp_root}"' EXIT
+
+          # --proto '=https' / --tlsv1.2 で平文・古い TLS へのダウングレードを禁じ、
+          # 一時的なネットワーク障害には --retry で対処する。
+          curl --proto '=https' --tlsv1.2 -sSfL --retry 3 --retry-delay 2 \
+            -o "${tmp_root}/${archive}" "${url}"
+
+          # チェックサム検証。ここを通らない限り展開も配置も行わない（fail-closed）。
+          verify_checksum "${tmp_root}/${archive}"
+
+          tar xzf "${tmp_root}/${archive}" -C "${tmp_root}"
+          if [ ! -d "${tmp_root}/${stem}" ]; then
+            echo "::error::アーカイブ内に想定したディレクトリが見つかりません"
+            echo "想定ディレクトリ名: ${stem}"
+            exit 1
+          fi
+
+          # atomic install: 検証済みのツリーを丸ごと rename で最終配置する
+          # （同一ファイルシステム内なら atomic）。ディレクトリ単位で動かすため、
+          # 複数バイナリは常に組として揃う（部分 install の排除）。
+          #
+          # GNU mv では `-T` が必須。これが無いと、並列実行で宛先ディレクトリが
+          # 先に作られていた場合に「宛先の中へ」移動してしまい、
+          # `<target_dir>/<stem>/` という入れ子の壊れた配置になる。
+          # BSD mv（macOS runner）は `-T` を持たないため、宛先の不在を確認して
+          # から移動し、競合で入れ子が生じた場合は巻き戻す。
+          # GNU mv は `--version` に応答するので、これで実装を判別する。
+          place_atomically() {
+            if mv --version >/dev/null 2>&1; then
+              mv -T "${tmp_root}/${stem}" "${target_dir}" 2>/dev/null
+              return
+            fi
+            [ -e "${target_dir}" ] && return 1
+            mv "${tmp_root}/${stem}" "${target_dir}" 2>/dev/null || return 1
+            # 判定と mv の間に他ジョブが宛先を作った場合、入れ子になっている。
+            # 自分が入れ込んだツリーを取り除き、先着の成果物を採用する。
+            if [ -d "${target_dir}/${stem}" ]; then
+              rm -rf "${target_dir}/${stem}"
+              return 1
+            fi
+            return 0
+          }
+
+          # mv の終了コードには依存しない。coreutils 9.2 以降は宛先が既に存在する
+          # 場合に非ゼロ終了しうるが、並列実行で他ジョブが同一バージョンを先に
+          # 配置しただけのケース（内容は決定的に同一）は成功として扱いたいため、
+          # 失敗時は「宛先に完全な成果物が揃っているか」で成否を判定する。
+          if ! place_atomically; then
+            if ! is_installed; then
+              echo "::error::ツールの配置に失敗しました"
+              echo "配置先: ${target_dir}"
+              exit 1
+            fi
+            echo "他ジョブが同一バージョンを先に配置済みのため、その成果物を使用します"
+          fi
+        fi
+
+        # 配置後の検証（fail-closed）。スキップ経路でも必ず通し、破損・部分 install・
+        # 版不一致（同一パスに別バージョンが残っている等）をここで検知する。
+        if ! is_installed; then
+          echo "::error::導入後に必要なバイナリが揃っていません"
+          echo "配置先: ${target_dir}"
+          exit 1
+        fi
+        primary="${binaries[0]}"
+        installed="$(
+          "${target_dir}/${primary}" --version 2>/dev/null \
+            | head -n 1 \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' \
+            | head -n 1 \
+            || true
+        )"
+        if [ "${installed}" != "${VERSION}" ]; then
+          echo "::error::導入後のバージョンが期待値と一致しません"
+          echo "期待: ${VERSION} / 実際: ${installed:-取得失敗}"
+          exit 1
+        fi
+
+        echo "install-dir=${target_dir}" >> "$GITHUB_OUTPUT"
+        if [ "${ADD_TO_PATH}" = "true" ]; then
+          echo "${target_dir}" >> "$GITHUB_PATH"
+        fi
+        echo "${TOOL} ${VERSION} (${TARGET}) の導入が完了しました"
+        echo "配置先: ${target_dir}"

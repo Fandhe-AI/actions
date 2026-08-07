@@ -7,6 +7,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | アクション | 説明 |
 |---|---|
 | [cargo-tool-install](cargo-tool-install/) | cargo ツールをバージョン固定（`--locked`）・冪等にインストールする |
+| [wasm-tool-install](wasm-tool-install/) | `wasm-bindgen-cli` / `wasm-pack` をバージョン固定・SHA256 検証・atomic install で冪等に導入する |
 | [post-comment](post-comment/) | Issue または PR にコメントを投稿する |
 | [idempotent-issue](idempotent-issue/) | ラベルを冪等に作成し、同一検索条件の open Issue が存在しない場合のみ Issue を起票する |
 | [project-sync](project-sync/) | Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する |
