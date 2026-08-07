@@ -24,6 +24,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | ディレクトリ | 形態 | 用途 |
 |---|---|---|
 | `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
+| `idempotent-issue/` | Composite Action | ラベル冪等作成 → 重複検索 → 未存在時のみ Issue 起票（`gh label create` / `gh issue list` / `gh issue create`） |
 | `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
 | `submodule-update/` | Composite Action | git submodule を最新に追従させ、変更があれば PR を自動作成 |
 | `skills-update/` | Composite Action | `npx skills` 導入のエージェントスキルを最新に更新し、変更があれば PR を自動作成 |

@@ -1,0 +1,110 @@
+name: Idempotent Issue
+description: ラベルを冪等に作成し、同一検索条件の open Issue が存在しない場合のみ Issue を起票する
+
+inputs:
+  label:
+    description: '起票 Issue に付与するラベル名（重複検索の絞り込みにも使用）'
+    required: true
+  label-color:
+    description: 'ラベルの色（6 桁 16 進、例: B60205）。省略時は gh の既定値'
+    required: false
+    default: ''
+  label-description:
+    description: 'ラベルの説明。省略時は設定しない'
+    required: false
+    default: ''
+  search-query:
+    description: '重複確認に使う検索クエリ（`gh issue list --search` へデータとして渡す）'
+    required: true
+  title:
+    description: '起票する Issue のタイトル'
+    required: true
+  body-file:
+    description: 'Issue 本文の Markdown ファイルパス'
+    required: true
+  token:
+    description: 'ラベル作成・Issue 検索・起票に使用するトークン（issues: write 権限）'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  created:
+    description: '新規起票したら true、既存 open Issue があり起票をスキップしたら false'
+    value: ${{ steps.issue.outputs.created }}
+  issue-number:
+    description: '新規起票した Issue、または検知した既存 open Issue の番号'
+    value: ${{ steps.issue.outputs.issue-number }}
+  issue-url:
+    description: '新規起票した Issue、または検知した既存 open Issue の URL'
+    value: ${{ steps.issue.outputs.issue-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create issue idempotently
+      id: issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        LABEL: ${{ inputs.label }}
+        LABEL_COLOR: ${{ inputs.label-color }}
+        LABEL_DESCRIPTION: ${{ inputs.label-description }}
+        SEARCH_QUERY: ${{ inputs.search-query }}
+        ISSUE_TITLE: ${{ inputs.title }}
+        BODY_FILE: ${{ inputs.body-file }}
+      run: |
+        set -euo pipefail
+
+        # ラベルは冪等に作成する（既存でも --force で失敗させない）。
+        # gh の一時障害でラベル作成に失敗しても、重複判定・起票の本処理は
+        # 続行する（警告のみ。移植元の ci.yml dep-audit / bench-schedule.yml と同挙動）。
+        label_args=(--force)
+        if [ -n "${LABEL_COLOR}" ]; then
+          label_args+=(--color "${LABEL_COLOR}")
+        fi
+        if [ -n "${LABEL_DESCRIPTION}" ]; then
+          label_args+=(--description "${LABEL_DESCRIPTION}")
+        fi
+        gh label create "${LABEL}" "${label_args[@]}" \
+          || echo "警告: ラベル ${LABEL} の作成に失敗しました（本処理は続行します）" >&2
+
+        # 重複起票防止: 同一検索条件 + 同一ラベルの open Issue が既にあれば起票しない。
+        # 検索クエリはデータとして渡し、シェル再解釈やコマンド置換に埋め込まない
+        # （コマンドインジェクション対策）。検索自体が失敗した場合は、重複起票の
+        # リスクを避けるためフェイルクローズで異常終了する。
+        existing_json="$(gh issue list \
+          --search "${SEARCH_QUERY}" \
+          --state open \
+          --label "${LABEL}" \
+          --json number,url)"
+        existing_count="$(printf '%s' "${existing_json}" | jq 'length')"
+
+        if [ "${existing_count}" != "0" ]; then
+          existing_number="$(printf '%s' "${existing_json}" | jq -r '.[0].number')"
+          existing_url="$(printf '%s' "${existing_json}" | jq -r '.[0].url')"
+          echo "既存 open Issue があるため起票をスキップします: #${existing_number} (${existing_url})"
+          {
+            echo "created=false"
+            echo "issue-number=${existing_number}"
+            echo "issue-url=${existing_url}"
+          } >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        if [ ! -f "${BODY_FILE}" ]; then
+          echo "エラー: body-file が見つかりません: ${BODY_FILE}" >&2
+          exit 1
+        fi
+
+        # gh issue create は成功時に Issue URL を標準出力へ返す。
+        issue_url="$(gh issue create \
+          --title "${ISSUE_TITLE}" \
+          --label "${LABEL}" \
+          --body-file "${BODY_FILE}")"
+        issue_number="${issue_url##*/}"
+        echo "Issue を起票しました: #${issue_number} (${issue_url})"
+        {
+          echo "created=true"
+          echo "issue-number=${issue_number}"
+          echo "issue-url=${issue_url}"
+        } >> "${GITHUB_OUTPUT}"
