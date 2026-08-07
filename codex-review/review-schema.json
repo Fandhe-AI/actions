@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Codex PR レビュー結果（Fandhe-AI/actions の codex-review reusable workflow の gate 判定・PR コメント描画が消費する同梱既定版。呼び出し側リポジトリの base にカスタム schema があればそちらが優先される）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings", "review_completed"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "PR 全体の総評（日本語、2〜4 文）。review_completed が false の場合はレビューを完遂できなかった理由（実行できなかったコマンドとエラー内容）を書く"
+    },
+    "review_completed": {
+      "type": "boolean",
+      "description": "レビュー手順（`git diff HEAD^1 HEAD` 等での差分取得・AGENTS.md「レビュー基準」節の読み取り）を完遂できた場合のみ true。false の場合は gate（.github/workflows/codex-review.yml）がジョブを fail-closed で失敗させ、P0/P1 findings の有無に関わらず PASS 扱いにしない"
+    },
+    "findings": {
+      "type": "array",
+      "description": "個別指摘。P0/P1 が 1 件でもあると CI ジョブが失敗する",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["priority", "title", "location", "detail"],
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"],
+            "description": "呼び出し側リポジトリの AGENTS.md（あれば）または同梱既定 prompt の汎用レビュー基準の優先度定義に従う"
+          },
+          "title": {
+            "type": "string",
+            "description": "指摘の 1 行要約（日本語）"
+          },
+          "location": {
+            "type": "string",
+            "description": "該当箇所（file_path:line 形式、複数箇所は代表 1 箇所）"
+          },
+          "detail": {
+            "type": "string",
+            "description": "問題の内容・根拠（違反した規約名）・推奨する修正方針（日本語）"
+          }
+        }
+      }
+    }
+  }
+}
