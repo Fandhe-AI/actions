@@ -29,6 +29,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | `submodule-update/` | Composite Action | git submodule を最新に追従させ、変更があれば PR を自動作成 |
 | `skills-update/` | Composite Action | `npx skills` 導入のエージェントスキルを最新に更新し、変更があれば PR を自動作成 |
 | `codex-review/` | Reusable workflow | OpenAI Codex CLI による PR 自動レビュー（codex-home 認証・2 段 fail-closed gate・多層防御。workflow 本体は `.github/workflows/codex-review.yml`） |
+| `pages-deploy/` | Reusable workflow | GitHub Pages への deploy（呼び出し側 build ジョブの dist を汎用 artifact で受け取り、Pages artifact 変換〜deploy まで共通側で実行。workflow 本体は `.github/workflows/pages-deploy.yml`） |
 
 ## コミット規約
 
