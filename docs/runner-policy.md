@@ -81,6 +81,11 @@ PR コメント投稿など資格情報に触れないジョブ（`post-feedback
 呼び出し側の可視性に従う。ただし既定値が `self-hosted` であるため、**public リポジトリから
 呼び出す場合は `post-feedback-runner-label: ubuntu-latest` を明示的に渡すこと**。
 
+この差分は wrapper テンプレートとして用意してあるため、導入時は可視性に応じて
+[`codex-review/templates/`](../codex-review/templates/) の該当ファイルをコピーすればよい
+（`codex-review.private.yml` / `codex-review.public.yml`。手順は
+[`codex-review/README.md`](../codex-review/README.md)「セットアップ」）。
+
 ## 4. 本リポジトリの reusable workflow との関係
 
 本リポジトリの reusable workflow（`codex-review` / `pages-deploy`）は、runner ラベルを
