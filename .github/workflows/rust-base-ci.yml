@@ -60,7 +60,7 @@ on:
         required: false
         default: advisories licenses sources
       cargo-deny-version:
-        description: cargo-deny の固定バージョン（cargo-tool-install へ渡す。厳密一致で検証される）
+        description: cargo-deny の固定バージョン（インストール後に厳密一致で検証される）
         type: string
         required: false
         default: 0.20.2
