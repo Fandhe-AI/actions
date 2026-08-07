@@ -178,9 +178,13 @@ gh api repos/reviewdog/action-setup/git/tags/<tag-object-sha> --jq '.object.sha'
 - `commitlint` / `reviewdog` は `pull_request` イベント専用。それ以外では**黙ってスキップせず
   エラーで停止**する（検証したつもりで検証されていない状態を避けるため）。
   `on: [pull_request, push]` の wrapper では上記セットアップ例 3 の書き方で切り替える
-- **fork からの PR では reviewdog への報告を自動的にスキップ**し、診断のログ出力のみに
-  フォールバックする（fork PR の `GITHUB_TOKEN` は read-only で `github-pr-*` reporter が
-  403 になるため）。スキップした事実は `::notice::` でログに残る
+- **クロスリポジトリ（fork）からの PR では reviewdog への報告を自動的にスキップ**し、
+  診断のログ出力のみにフォールバックする（この場合 `GITHUB_TOKEN` は read-only で
+  `github-pr-*` reporter が 403 になるため）。スキップした事実は `::notice::` でログに残る。
+  判定は `head.repo.full_name` と `github.repository` の比較で行うため、fork された
+  リポジトリ内で完結する PR は通常どおり reviewdog で報告される
+- フォールバック時も `reviewdog-fail-level` の設定を尊重する（既定の `none` なら
+  違反があってもジョブは緑）。fork PR と同一リポジトリ PR で成否の基準が食い違わない
 
 ### 出力・失敗の挙動
 

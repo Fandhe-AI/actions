@@ -232,7 +232,8 @@ jobs:
           MARKDOWNLINT_GLOBS: ${{ inputs.markdownlint-globs }}
           USE_REVIEWDOG: ${{ inputs.reviewdog }}
           EVENT_NAME: ${{ github.event_name }}
-          IS_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
           RD_REPORTER: ${{ inputs.reviewdog-reporter }}
           RD_FILTER_MODE: ${{ inputs.reviewdog-filter-mode }}
           RD_LEVEL: ${{ inputs.reviewdog-level }}
@@ -244,6 +245,7 @@ jobs:
 
           # ---- reviewdog 利用可否の判定（lint 実行前に fail-fast） ----
           use_rd=0
+          rd_fallback=0
           if [ "${USE_REVIEWDOG}" = "true" ]; then
             if [ "${EVENT_NAME}" != "pull_request" ]; then
               echo "::error::reviewdog は pull_request イベントでのみ利用できます"
@@ -261,15 +263,41 @@ jobs:
                 exit 1
                 ;;
             esac
-            if [ "${IS_FORK_PR}" = "true" ]; then
-              # fork からの PR では GITHUB_TOKEN が read-only になり github-pr-* reporter が
-              # 403 で失敗する。lint 自体は正常なのに赤くなるのを避けつつ、
-              # 「報告しなかった」ことを notice で明示する（サイレントにしない）
-              echo "::notice::fork からの PR のため reviewdog への報告を行わず、診断のログ出力のみにフォールバックします"
+            # 「リポジトリが fork かどうか（head.repo.fork）」ではなく
+            # 「PR がクロスリポジトリかどうか」で判定する。fork されたリポジトリ内で
+            # 完結する PR は head.repo.fork=true でも GITHUB_TOKEN は write のため、
+            # full_name の比較でなければ不要にフォールバックしてしまう
+            if [ "${HEAD_REPO}" != "${BASE_REPO}" ]; then
+              # 別リポジトリ（fork）からの PR では GITHUB_TOKEN が read-only になり
+              # github-pr-* reporter が 403 で失敗する。lint 自体は正常なのに赤くなるのを
+              # 避けつつ、「報告しなかった」ことを notice で明示する（サイレントにしない）
+              echo "::notice::別リポジトリ（fork）からの PR のため reviewdog への報告を行わず、診断のログ出力のみにフォールバックします"
+              rd_fallback=1
             else
               use_rd=1
             fi
           fi
+
+          # ---- フォールバック時の終了コード方針（reviewdog-fail-level を尊重） ----
+          # reviewdog をスキップしても違反の扱いは reviewdog 実行時と揃える。
+          # errorformat に %t を含めないため全診断は -level の重大度になる。
+          # よって「-fail-level が any」または「-level >= -fail-level」のときだけ落とす
+          rd_should_fail=1
+          case "${RD_FAIL_LEVEL}" in
+            none) rd_should_fail=0 ;;
+            any | info) rd_should_fail=1 ;;
+            warning)
+              if [ "${RD_LEVEL}" = "info" ]; then
+                rd_should_fail=0
+              fi
+              ;;
+            error)
+              if [ "${RD_LEVEL}" != "error" ]; then
+                rd_should_fail=0
+              fi
+              ;;
+            *) rd_should_fail=1 ;;
+          esac
 
           # ---- glob のパース（改行区切り → 配列。trim して空行は捨てる） ----
           # markdownlint-cli は自前で glob 展開するため、シェルで展開されないよう
@@ -328,6 +356,11 @@ jobs:
           fi
 
           if [ "${use_rd}" -eq 0 ]; then
+            # reviewdog フォールバック時のみ fail-level を尊重する。
+            # reviewdog: false（素の lint モード）では fail-level は無関係なので rc をそのまま返す
+            if [ "${rd_fallback}" -eq 1 ] && [ "${rd_should_fail}" -eq 0 ]; then
+              exit 0
+            fi
             exit "${rc}"
           fi
 
@@ -407,7 +440,8 @@ jobs:
           YAMLLINT_CONFIG: ${{ inputs.yamllint-config }}
           USE_REVIEWDOG: ${{ inputs.reviewdog }}
           EVENT_NAME: ${{ github.event_name }}
-          IS_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
           RD_REPORTER: ${{ inputs.reviewdog-reporter }}
           RD_FILTER_MODE: ${{ inputs.reviewdog-filter-mode }}
           RD_LEVEL: ${{ inputs.reviewdog-level }}
@@ -419,6 +453,7 @@ jobs:
 
           # ---- reviewdog 利用可否の判定（lint 実行前に fail-fast） ----
           use_rd=0
+          rd_fallback=0
           if [ "${USE_REVIEWDOG}" = "true" ]; then
             if [ "${EVENT_NAME}" != "pull_request" ]; then
               echo "::error::reviewdog は pull_request イベントでのみ利用できます"
@@ -435,12 +470,34 @@ jobs:
                 exit 1
                 ;;
             esac
-            if [ "${IS_FORK_PR}" = "true" ]; then
-              echo "::notice::fork からの PR のため reviewdog への報告を行わず、診断のログ出力のみにフォールバックします"
+            # リポジトリが fork かどうかではなく、PR がクロスリポジトリかどうかで判定する
+            if [ "${HEAD_REPO}" != "${BASE_REPO}" ]; then
+              echo "::notice::別リポジトリ（fork）からの PR のため reviewdog への報告を行わず、診断のログ出力のみにフォールバックします"
+              rd_fallback=1
             else
               use_rd=1
             fi
           fi
+
+          # ---- フォールバック時の終了コード方針（reviewdog-fail-level を尊重） ----
+          # errorformat に %t を含めないため全診断は -level の重大度になる。
+          # よって「-fail-level が any」または「-level >= -fail-level」のときだけ落とす
+          rd_should_fail=1
+          case "${RD_FAIL_LEVEL}" in
+            none) rd_should_fail=0 ;;
+            any | info) rd_should_fail=1 ;;
+            warning)
+              if [ "${RD_LEVEL}" = "info" ]; then
+                rd_should_fail=0
+              fi
+              ;;
+            error)
+              if [ "${RD_LEVEL}" != "error" ]; then
+                rd_should_fail=0
+              fi
+              ;;
+            *) rd_should_fail=1 ;;
+          esac
 
           # ---- 検査対象のパース（改行区切り → 配列） ----
           targets=()
@@ -496,6 +553,10 @@ jobs:
           fi
 
           if [ "${use_rd}" -eq 0 ]; then
+            # reviewdog フォールバック時のみ fail-level を尊重する
+            if [ "${rd_fallback}" -eq 1 ] && [ "${rd_should_fail}" -eq 0 ]; then
+              exit 0
+            fi
             exit "${rc}"
           fi
 
