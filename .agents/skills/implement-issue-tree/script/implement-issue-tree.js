@@ -157,7 +157,7 @@ const IMPL_SCHEMA = {
   type: 'object',
   required: ['branch', 'summary'],
   properties: {
-    prNumber: { type: 'number', description: 'push 前 review フローでは常に 0（PR はまだ作成しない）' },
+    prNumber: { type: 'number', description: '通常は 0（PR はまだ作成しない）。手順 0b-a で既存 open PR を再利用した場合のみその PR 番号' },
     branch: { type: 'string' },
     summary: { type: 'string' },
     worktreePath: { type: 'string', description: 'pwd の結果（worktree の絶対パス）。空文字でも可' },
@@ -990,7 +990,7 @@ function implementPrompt(item, plan) {
     '   summary に「対象外（out-of-scope）」として列挙する（push 後の PR 本文への記録は後続エージェントが行う）。',
     '8. pwd の結果を worktreePath として返す（worktree の絶対パスを記録するため）。',
     '返却: branch / summary（実装内容の要約。対象外項目を含む。失敗時は理由と現状）/ worktreePath（pwd の結果）。',
-    '（prNumber は PR 未作成のため返却しない。返しても 0 として扱われる）',
+    '（prNumber は手順 0b-a で既存 open PR を再利用した場合のみその PR 番号を返す。それ以外は PR 未作成のため返却しない = 0 扱い）',
   ].join('\n')
 }
 
@@ -1061,6 +1061,8 @@ function monitorPrompt(item, impl, externalApps) {
 function prCreatePrompt(item, impl, outOfScope) {
   const branch = sanitizeBranch(impl.branch)
   const title = sanitize(item.title)
+  // impl 手順 0b-a で既存 open PR を再利用した場合はその番号（正の整数）。それ以外は 0。
+  const existingPr = Number.isInteger(impl.prNumber) && impl.prNumber > 0 ? impl.prNumber : 0
   const outOfScopeSection = outOfScope
     ? `\n\n## 対象外（out-of-scope）\n${sanitize(outOfScope)}`
     : ''
@@ -1071,7 +1073,15 @@ function prCreatePrompt(item, impl, outOfScope) {
     '手順:',
     `1. git push origin ${branch} でローカルブランチを push する（Bash の timeout に 600000 を指定）。`,
     `   push が失敗した場合は prNumber: 0 と失敗理由を返す。`,
-    `2. create-pr スキルに従い base ${baseBranch} で PR を作成する。`,
+    ...(existingPr > 0
+      ? [
+          `2. イシュー #${item.number} には既存の open PR #${existingPr}（実装エージェントが再利用を検出済み）が存在するため、新規 PR を作成しない。`,
+          `   gh pr view ${existingPr} --json state,headRefName で state が OPEN かつ headRefName が ${JSON.stringify(branch)} であることを確認し、`,
+          `   確認できたら prNumber: ${existingPr} を返す（body の更新は不要。gh pr create は実行しない）。`,
+          `   確認できない場合（CLOSED / MERGED / ブランチ不一致）のみ、以下の新規 PR 作成手順にフォールバックする:`,
+        ]
+      : []),
+    `${existingPr > 0 ? '   ' : '2. '}create-pr スキルに従い base ${baseBranch} で PR を作成する。`,
     `   body のテンプレート:`,
     '   ```',
     '   ## Summary',
@@ -1390,7 +1400,7 @@ function recoverImplementPrompt(item, brief, branch) {
     '   実装の過程で現スコープ外と判断した事項は summary に「対象外（out-of-scope）」として列挙する。',
     '8. pwd の結果を worktreePath として返す（worktree の絶対パスを記録するため）。',
     '返却: branch / summary（実装内容の要約。対象外項目を含む。失敗時は理由と現状）/ worktreePath（pwd の結果）。',
-    '（prNumber は PR 未作成のため返却しない。返しても 0 として扱われる）',
+    '（prNumber は手順 0b-a で既存 open PR を再利用した場合のみその PR 番号を返す。それ以外は PR 未作成のため返却しない = 0 扱い）',
   ].join('\n')
 }
 
@@ -1427,15 +1437,15 @@ const detectResult = await agent(
     COMMON,
     '直前 3 件の merged PR から GitHub Actions 以外の CI チェック App を検出する。',
     '手順:',
-    `1. REPO=$(gh repo view --json owner,name --jq '"\\(.owner.login)/\\(.name)"') を実行してリポジトリを取得する。`,
-    `2. 以下のコマンドで外部チェック App slug を収集する:`,
+    `1. 以下を 1 回の Bash 実行で行い、外部チェック App slug を収集する（REPO の設定と収集を同一シェルで完結させる。別々の Bash 実行に分けると REPO が引き継がれない）:`,
+    `   REPO=$(gh repo view --json owner,name --jq '"\\(.owner.login)/\\(.name)"') && \\`,
     `   gh pr list --state merged --limit 3 --json headRefOid --jq '.[].headRefOid' \\`,
-    `     | xargs -I{} sh -c 'gh api "repos/\${REPO}/commits/$1/check-runs" \\`,
-    `         --jq \\'[.check_runs[] | select(.app.slug != "github-actions") | .app.slug] | .[]\\'  2>/dev/null' _ {} \\`,
+    `     | xargs -I{} sh -c 'gh api "repos/$2/commits/$1/check-runs" \\`,
+    `         --jq \\'[.check_runs[] | select(.app.slug != "github-actions") | .app.slug] | .[]\\'  2>/dev/null' _ {} "\${REPO}" \\`,
     `     | sort -u`,
-    `   （SHA は xargs の '{}' を直接 URL に展開せず、sh -c の位置引数 $1 経由で渡してインジェクションを防ぐ。変数 REPO も "\${REPO}" でクォート済み）`,
-    '3. merged PR が 0 件・コマンド失敗・出力が空の場合は apps: [] を返す（新規リポで停止しない）。',
-    '4. 収集した slug を重複排除して apps 配列として返す（例: ["cursor"]）。',
+    `   （SHA と REPO は xargs の '{}' や変数を sh -c のスクリプト文字列へ直接展開せず、位置引数 $1・$2 経由で渡してインジェクションを防ぐ。REPO は export されないため子シェルの環境変数としては参照できず、必ず位置引数で渡す）`,
+    '2. merged PR が 0 件・コマンド失敗・出力が空の場合は apps: [] を返す（新規リポで停止しない）。',
+    '3. 収集した slug を重複排除して apps 配列として返す（例: ["cursor"]）。',
     '返却: apps（外部 App slug の一意配列。検出なしなら空配列）。',
   ].join('\n'),
   { label: 'detect:external-checks', phase: 'Tree', model: 'haiku', effort: 'low', schema: EXTERNAL_CHECKS_SCHEMA },
@@ -1765,7 +1775,12 @@ async function runImplement(item) {
           recordFailure({ issue: item.number, reason })
           return false
         }
-        impl = { ...impl, worktreePath: sanitizeWorktreePath(impl.worktreePath ?? ''), prNumber: 0 }
+        // 0b-a で既存 open PR を再利用した場合はその番号を保持する（pr-create フェーズが新規作成をスキップする）
+        impl = {
+          ...impl,
+          worktreePath: sanitizeWorktreePath(impl.worktreePath ?? ''),
+          prNumber: Number.isInteger(impl.prNumber) && impl.prNumber > 0 ? impl.prNumber : 0,
+        }
         // impl 完了直後: reviewing に遷移し branch / worktree を記録する
         // continue 経路では旧 worktree は既に掃除済みのため cleanupWorktree は渡さない
         await updateState(item.number, {
@@ -1881,7 +1896,13 @@ async function runImplement(item) {
       // impl が返した worktreePath もホワイトリスト検証を通す。
       // この時点では削除候補に登録しない（実装 worktree はレビュー・マージまで生存する）。
       // 登録は削除を試みる地点（updateState の cleanupWorktree）でのみ行う。
-      impl = { ...impl, worktreePath: sanitizeWorktreePath(impl.worktreePath ?? ''), prNumber: 0 }
+      // prNumber は 0b-a で既存 open PR を再利用した場合のみ正の値を保持する
+      // （pr-create フェーズが新規作成をスキップして再利用する）。それ以外は 0 に正規化する。
+      impl = {
+        ...impl,
+        worktreePath: sanitizeWorktreePath(impl.worktreePath ?? ''),
+        prNumber: Number.isInteger(impl.prNumber) && impl.prNumber > 0 ? impl.prNumber : 0,
+      }
       // impl 完了直後: reviewing に遷移し branch / worktree を記録する。
       // PR はまだ作成していないため pr: 0 を記録する（PR 作成は Review 通過後）。
       // フォールバック前に保存済みの旧 worktree があれば削除して孤児化を防ぐ
@@ -2046,24 +2067,31 @@ async function runImplement(item) {
     // impl オブジェクトを PR 作成後の prNumber で更新する（以降の Merge ループが参照する）
     impl = { ...impl, prNumber: prCreateResult.prNumber }
     log(`#${item.number}: push + PR 作成完了 — PR #${impl.prNumber}`)
-    // 最終 Review ラウンドで Low のみで通過した場合、その Low 指摘を PR コメントとして残す
-    // （マージ後 follow-up 候補。マージ自体はブロックしない）。失敗してもマージは継続する。
-    if (deferredLowFindings) {
-      await agent(lowFindingsCommentPrompt(item, impl.prNumber, deferredLowFindings), {
-        label: `low-comment:#${item.number}`,
-        phase: 'Review',
-        model: 'sonnet',
-        effort: 'low',
-        schema: STATE_WRITE_SCHEMA,
-      })
-      log(`#${item.number}: 最終 Review の Low 指摘を PR #${impl.prNumber} にコメント追加した`)
-    }
     // PR 作成完了: pr / status を monitoring に更新して Merge ループへ引き継ぐ。
     // fixCount を runImplement スコープ全体で共有するため、以降の Merge ループもこの変数を使う。
     // Review fix で worktree が差し替わっている場合があるため、impl.worktreePath（最初の
     // Implement worktree。Review fix 後は削除済みのことが多い）ではなく Review ループで
     // 追跡した最新の currentWorktreePath を Merge ループへ引き継ぐ（孤児 worktree 防止）。
+    // Low コメント投稿より先に monitoring を記録する（コメント投稿が失敗しても PR 作成済みの
+    // 事実が状態ファイルに残り、再開時に monitoring から復帰できるようにするため）。
     await updateState(item.number, { status: 'monitoring', pr: impl.prNumber })
+    // 最終 Review ラウンドで Low のみで通過した場合、その Low 指摘を PR コメントとして残す
+    // （マージ後 follow-up 候補。マージ自体はブロックしない）。失敗してもマージは継続する
+    // ため try/catch で吸収し、失敗してもイシューを failed にしない。
+    if (deferredLowFindings) {
+      try {
+        await agent(lowFindingsCommentPrompt(item, impl.prNumber, deferredLowFindings), {
+          label: `low-comment:#${item.number}`,
+          phase: 'Review',
+          model: 'sonnet',
+          effort: 'low',
+          schema: STATE_WRITE_SCHEMA,
+        })
+        log(`#${item.number}: 最終 Review の Low 指摘を PR #${impl.prNumber} にコメント追加した`)
+      } catch (e) {
+        log(`⚠️ #${item.number}: Low 指摘の PR コメント追加に失敗したがマージ処理は継続する: ${sanitize(String(e?.message ?? e))}`)
+      }
+    }
     return await runMergeLoop(item, impl, fixCount, currentWorktreePath)
   }
 

@@ -77,10 +77,12 @@ gh api --paginate "repos/{owner}/{repo}/issues/<parent>/sub_issues?per_page=100"
 gh issue view <N>
 
 # 外部チェック自動判定（直前 3 件の merged PR の check-runs を確認）
+# REPO は export されないため子シェル（sh -c）の環境変数としては見えない。
+# 必ず位置引数 $2 で渡す（$1 = SHA、$2 = REPO。インジェクション防止も兼ねる）
 REPO=$(gh repo view --json owner,name --jq '"\(.owner.login)/\(.name)"')
 gh pr list --state merged --limit 3 --json headRefOid --jq '.[].headRefOid' \
-  | xargs -I{} sh -c 'gh api "repos/${REPO}/commits/$1/check-runs" \
-      --jq '"'"'[.check_runs[] | select(.app.slug != "github-actions") | .app.slug] | .[]'"'"' 2>/dev/null' _ {} \
+  | xargs -I{} sh -c 'gh api "repos/$2/commits/$1/check-runs" \
+      --jq '"'"'[.check_runs[] | select(.app.slug != "github-actions") | .app.slug] | .[]'"'"' 2>/dev/null' _ {} "${REPO}" \
   | sort -u
 ```
 
