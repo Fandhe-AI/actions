@@ -24,6 +24,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | ディレクトリ | 形態 | 用途 |
 |---|---|---|
 | `cargo-tool-install/` | Composite Action | cargo ツールのバージョン固定（`--locked`）・冪等インストール |
+| `wasm-tool-install/` | Composite Action | `wasm-bindgen-cli` / `wasm-pack` のバージョン固定 + SHA256 検証 + atomic install（rename）による冪等導入 |
 | `rust-toolchain-setup/` | Composite Action | self-hosted runner 上での rustup 自己修復と `rust-toolchain.toml` へのツールチェーン同期（`components` で追加コンポーネントを冪等インストール） |
 | `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
 | `idempotent-issue/` | Composite Action | ラベル冪等作成 → 重複検索 → 未存在時のみ Issue 起票（`gh label create` / `gh issue list` / `gh issue create`） |
