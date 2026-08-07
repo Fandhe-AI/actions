@@ -16,6 +16,12 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | [codex-review](codex-review/) | OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
 | [pages-deploy](pages-deploy/) | GitHub Pages への deploy（reusable workflow。呼び出し側 build ジョブの dist を artifact で受け取り、Pages artifact 変換〜deploy まで担う） |
 
+## ドキュメント
+
+| ドキュメント | 説明 |
+|---|---|
+| [docs/runner-policy.md](docs/runner-policy.md) | 組織 runner 方針（public は GitHub ホステッド / private は self-hosted、対象リポジトリ一覧、codex-review 例外） |
+
 ## 使い方
 
 セキュリティのため、Action は `@main` ではなくコミット SHA で固定して参照します：
