@@ -47,10 +47,9 @@ workflow からは検証できないため、runner 構築・org 設定の側で
 
 ## 2. public リポジトリ向け wrapper
 
-`codex-review/README.md` の wrapper 例は private リポジトリ（既定値のまま動く側）を
-前提としている。**public リポジトリはそのままコピーしてはいけない**。
-`post-feedback-runner-label` の既定値が `self-hosted` であるため、コメント投稿ジョブが
-方針違反の runner に載る。
+`post-feedback-runner-label` の既定値は `self-hosted`（private リポジトリ前提）である。
+そのため **public リポジトリでは明示的な上書きが必須**で、既定値のまま呼び出すと
+コメント投稿ジョブが方針違反の runner に載る。
 
 public リポジトリでは以下を `.github/workflows/codex-review.yml` として設置する。
 
