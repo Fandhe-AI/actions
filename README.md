@@ -8,6 +8,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 |---|---|
 | [cargo-tool-install](cargo-tool-install/) | cargo ツールをバージョン固定（`--locked`）・冪等にインストールする |
 | [post-comment](post-comment/) | Issue または PR にコメントを投稿する |
+| [idempotent-issue](idempotent-issue/) | ラベルを冪等に作成し、同一検索条件の open Issue が存在しない場合のみ Issue を起票する |
 | [project-sync](project-sync/) | Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する |
 | [submodule-update](submodule-update/) | git submodule を最新に追従させ、変更があれば PR を自動作成する |
 | [skills-update](skills-update/) | `npx skills` で導入したエージェントスキルを最新に更新し、変更があれば PR を自動作成する |
