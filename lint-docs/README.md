@@ -184,7 +184,9 @@ gh api repos/reviewdog/action-setup/git/tags/<tag-object-sha> --jq '.object.sha'
   判定は `head.repo.full_name` と `github.repository` の比較で行うため、fork された
   リポジトリ内で完結する PR は通常どおり reviewdog で報告される
 - フォールバック時も `reviewdog-fail-level` の設定を尊重する（既定の `none` なら
-  違反があってもジョブは緑）。fork PR と同一リポジトリ PR で成否の基準が食い違わない
+  違反があってもジョブは緑）。fork PR だけが違反で赤くなる不整合は起きない。
+  ただし reviewdog が無いため `reviewdog-filter-mode` による絞り込みは効かず、
+  `fail-level` は検出した**すべての**違反に対して適用される（差分行に限定されない）
 
 ### 出力・失敗の挙動
 
