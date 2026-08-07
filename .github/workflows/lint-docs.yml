@@ -1,0 +1,574 @@
+name: Docs lint (reusable)
+
+# ドキュメント／設定ファイル系 lint（markdownlint・editorconfig-checker・yamllint・
+# commitlint）を束ねた reusable workflow。Fandhe-AI/local-server の check-pr.yml
+# （reviewdog 4 種）・team-hub の ci.yml（editorconfig-checker）・agent-*-skills の
+# npx 直呼びで個別実装されていたものを workflow_call 化して集約したもの。
+# 呼び出し側リポジトリは SHA 固定の薄い wrapper から使う:
+#
+#   jobs:
+#     lint-docs:
+#       permissions:
+#         contents: read
+#         pull-requests: write # reviewdog: true のときのみ必要
+#       uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@<SHA> # main
+#       with:
+#         runner-label: self-hosted
+#         reviewdog: true
+#
+# 設計の要点:
+# - 各 lint は独立ジョブ + boolean input で個別に有効／無効を切り替える。1 つの lint の
+#   違反が他の lint の実行を妨げないよう、ジョブ間に needs 依存を持たせない
+# - runner は runner-label input で呼び出し元が指定する。public（GitHub ホステッド）／
+#   private（self-hosted）の両文化圏から利用されるため。既定は ubuntu-latest:
+#   self-hosted を既定にすると runner 未登録のリポジトリでジョブが無限にキューされ、
+#   「失敗」ではなく「ハング」という気付きにくい壊れ方をするため
+# - reviewdog は opt-in（既定 false）。無効時は linter の終了コードでジョブを失敗させる
+#   通常の CI として振る舞い、pull_request 以外のイベントでも使える
+# - 診断内容は reviewdog の有無にかかわらず **必ずログへ出力する**。reviewdog へ渡す
+#   ためだけにファイルへ退避して出力し忘れると、plain モードで「理由の見えない赤」に
+#   なるため（移設元 check-pr.yml はこの状態だった）。ただし linter 出力には
+#   呼び出し側リポジトリのファイル名・内容が含まれうるため、出力は
+#   ::stop-commands:: で挟んで workflow command 注入を無効化してから流す
+# - reviewdog 実行時は reviewdog をステップ最後のコマンドにして終了コードを伝播させ、
+#   `|| true` で握り潰さない（403 等の報告失敗をパスに見せないため）
+# - 外部 action はすべてコミット SHA 固定。lint ツール本体のバージョンも既定値で固定し、
+#   latest を使わない（サプライチェーン対策。必要なら input で上書きする）
+# - concurrency は reusable workflow のトップレベルでは機能しないため、呼び出し側
+#   wrapper で設定する（README の wrapper 例参照）
+#
+# permissions についての設計判断（重要）:
+#   reusable workflow のジョブが宣言した permissions は「呼び出し側が付与した権限を絞る」
+#   方向にしか働かず、呼び出し側が付与していない権限を宣言すると失敗する。
+#   markdownlint / yamllint は reviewdog: true のときだけ pull-requests: write を必要と
+#   するが、permissions: は式を書けず条件付き宣言ができない。そのため両ジョブでは
+#   job-level permissions を宣言せず、呼び出し側 uses: ジョブが付与した権限をそのまま
+#   継承する。権限要件が無条件に決まる editorconfig / commitlint は contents: read を
+#   明示する。呼び出し側は reviewdog: true のときだけ pull-requests: write を足すこと。
+
+on:
+  workflow_call:
+    inputs:
+      # ------------------------------ 実行環境 ------------------------------
+      runner-label:
+        description: >-
+          全 lint ジョブを実行する runner ラベル。public リポジトリは ubuntu-latest、
+          private（fandhe 系）は self-hosted 等を指定する。
+          複数ラベルの AND 指定（runs-on の配列形式）には対応しない
+        type: string
+        required: false
+        default: ubuntu-latest
+      timeout-minutes:
+        description: 各 lint ジョブの timeout（分）
+        type: number
+        required: false
+        default: 15
+      node-version:
+        description: markdownlint / commitlint が使う Node.js のバージョン指定
+        type: string
+        required: false
+        default: lts/*
+      python-version:
+        description: yamllint が使う Python のバージョン指定
+        type: string
+        required: false
+        default: '3.x'
+
+      # ------------------------------ lint 切替 ------------------------------
+      markdownlint:
+        description: markdownlint-cli による Markdown lint を実行する
+        type: boolean
+        required: false
+        default: true
+      editorconfig:
+        description: editorconfig-checker による EditorConfig 準拠チェックを実行する
+        type: boolean
+        required: false
+        default: true
+      yamllint:
+        description: yamllint による YAML lint を実行する
+        type: boolean
+        required: false
+        default: true
+      commitlint:
+        description: >-
+          commitlint による Conventional Commits 検証を実行する。PR の commit 範囲を
+          対象にするため pull_request イベントでのみ利用可能（他イベントでは
+          fail-closed でエラーになるため、push でも動かす wrapper では
+          github.event_name で切り替えること）
+        type: boolean
+        required: false
+        default: true
+
+      # ------------------------------ reviewdog ------------------------------
+      reviewdog:
+        description: >-
+          markdownlint / yamllint の指摘を reviewdog で PR にインラインコメントする。
+          有効にする場合、呼び出し側 uses: ジョブに pull-requests: write の付与が必要。
+          pull_request イベントでのみ利用可能（他イベントでは fail-closed でエラー）
+        type: boolean
+        required: false
+        default: false
+      reviewdog-reporter:
+        description: >-
+          reviewdog の -reporter。github-pr-review / github-pr-check /
+          github-check / local のいずれか
+        type: string
+        required: false
+        default: github-pr-review
+      reviewdog-filter-mode:
+        description: reviewdog の -filter-mode（added / diff_context / file / nofilter）
+        type: string
+        required: false
+        default: added
+      reviewdog-level:
+        description: reviewdog の -level（info / warning / error）
+        type: string
+        required: false
+        default: warning
+      reviewdog-fail-level:
+        description: >-
+          reviewdog の -fail-level（none / any / info / warning / error）。
+          既定の none は「コメントは出すがジョブは落とさない」段階導入向け
+        type: string
+        required: false
+        default: none
+      reviewdog-version:
+        description: reviewdog 本体の固定バージョン（サプライチェーン対策のため latest 非推奨）
+        type: string
+        required: false
+        default: v0.21.0
+
+      # ------------------------- 各 lint の詳細設定 -------------------------
+      markdownlint-version:
+        description: markdownlint-cli の固定バージョン
+        type: string
+        required: false
+        default: 0.49.1
+      markdownlint-globs:
+        description: >-
+          markdownlint に渡す glob パターン（改行区切りで複数指定可）。
+          除外は呼び出し側リポジトリの .markdownlintignore で指定する
+        type: string
+        required: false
+        default: '**/*.md'
+      editorconfig-checker-version:
+        description: editorconfig-checker 本体の release タグ（例 v3.8.0）
+        type: string
+        required: false
+        default: v3.8.0
+      yamllint-version:
+        description: yamllint の固定バージョン
+        type: string
+        required: false
+        default: 1.38.0
+      yamllint-targets:
+        description: yamllint の検査対象パス（改行区切りで複数指定可）
+        type: string
+        required: false
+        default: '.'
+      yamllint-config:
+        description: >-
+          yamllint の -c に渡す設定ファイルパス。空の場合は指定せず、yamllint 自身の
+          自動探索（.yamllint / .yamllint.yaml / .yamllint.yml）に任せる
+        type: string
+        required: false
+        default: ''
+      commitlint-version:
+        description: '@commitlint/cli の固定バージョン'
+        type: string
+        required: false
+        default: 21.2.1
+      commitlint-config-version:
+        description: '@commitlint/config-conventional の固定バージョン'
+        type: string
+        required: false
+        default: 21.2.0
+      commitlint-extends:
+        description: >-
+          commitlint --extends に渡す共有設定。呼び出し側リポジトリに commitlint 設定が
+          無くても動くよう既定で @commitlint/config-conventional を指定する
+          （リポジトリ側に設定がある場合はそちらのルールが併用される）。
+          空にすると --extends を渡さない
+        type: string
+        required: false
+        default: '@commitlint/config-conventional'
+
+jobs:
+  # ==========================================================================
+  # markdownlint（reviewdog 対応）
+  # ==========================================================================
+  markdownlint:
+    name: markdownlint
+    if: inputs.markdownlint
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # job-level permissions は宣言しない（冒頭コメントの設計判断を参照）。
+    # reviewdog: true のとき pull-requests: write が必要になるが、条件付きの
+    # permissions 宣言はできないため呼び出し側の付与をそのまま継承する。
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # lint は読み取りのみで push しないため workspace に資格情報を残さない
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # reviewdog バイナリを host に配置するだけの action（コンテナ型ではないため
+      # Docker-out-of-Docker 構成の self-hosted runner でも動作する）
+      - name: Setup reviewdog
+        if: inputs.reviewdog
+        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
+        with:
+          reviewdog_version: ${{ inputs.reviewdog-version }}
+
+      - name: Run markdownlint
+        env:
+          MARKDOWNLINT_VERSION: ${{ inputs.markdownlint-version }}
+          MARKDOWNLINT_GLOBS: ${{ inputs.markdownlint-globs }}
+          USE_REVIEWDOG: ${{ inputs.reviewdog }}
+          EVENT_NAME: ${{ github.event_name }}
+          IS_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
+          RD_REPORTER: ${{ inputs.reviewdog-reporter }}
+          RD_FILTER_MODE: ${{ inputs.reviewdog-filter-mode }}
+          RD_LEVEL: ${{ inputs.reviewdog-level }}
+          RD_FAIL_LEVEL: ${{ inputs.reviewdog-fail-level }}
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # ---- reviewdog 利用可否の判定（lint 実行前に fail-fast） ----
+          use_rd=0
+          if [ "${USE_REVIEWDOG}" = "true" ]; then
+            if [ "${EVENT_NAME}" != "pull_request" ]; then
+              echo "::error::reviewdog は pull_request イベントでのみ利用できます"
+              echo "push 等でも動かす wrapper では github.event_name で reviewdog input を切り替えてください"
+              echo "現在のイベント: ${EVENT_NAME}"
+              exit 1
+            fi
+            # reporter は reviewdog の挙動（どこへ書き込むか）を決めるため allowlist で検証する
+            case "${RD_REPORTER}" in
+              github-pr-review | github-pr-check | github-check | local) ;;
+              *)
+                echo "::error::reviewdog-reporter が不正です"
+                echo "許可値: github-pr-review / github-pr-check / github-check / local"
+                echo "指定値: ${RD_REPORTER}"
+                exit 1
+                ;;
+            esac
+            if [ "${IS_FORK_PR}" = "true" ]; then
+              # fork からの PR では GITHUB_TOKEN が read-only になり github-pr-* reporter が
+              # 403 で失敗する。lint 自体は正常なのに赤くなるのを避けつつ、
+              # 「報告しなかった」ことを notice で明示する（サイレントにしない）
+              echo "::notice::fork からの PR のため reviewdog への報告を行わず、診断のログ出力のみにフォールバックします"
+            else
+              use_rd=1
+            fi
+          fi
+
+          # ---- glob のパース（改行区切り → 配列。trim して空行は捨てる） ----
+          # markdownlint-cli は自前で glob 展開するため、シェルで展開されないよう
+          # 必ずクォートして渡す
+          globs=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            if [ -n "${line}" ]; then
+              globs+=("${line}")
+            fi
+          done <<< "${MARKDOWNLINT_GLOBS}"
+          if [ "${#globs[@]}" -eq 0 ]; then
+            echo "::error::markdownlint-globs が空です"
+            exit 1
+          fi
+
+          # ---- markdownlint の導入 ----
+          # `npx --yes <pkg>` 方式は取らない: npx は初回実行時にインストール警告
+          # （npm warn EBADENGINE 等）を **stderr** へ出すため、markdownlint の診断
+          # （同じく stderr）と混ざって reviewdog の errorformat 解析へ流れ込む。
+          # インストールを別コマンドに分離し、診断だけが stderr に出る状態を作る。
+          # グローバル導入（npm install -g）は self-hosted runner で書き込み権限が
+          # 無い場合があるため、ジョブ専用の $RUNNER_TEMP 配下へ入れて直接叩く
+          npm_prefix="${RUNNER_TEMP}/markdownlint-cli"
+          npm install --prefix "${npm_prefix}" --no-save --no-audit --no-fund \
+            "markdownlint-cli@${MARKDOWNLINT_VERSION}"
+          markdownlint_bin="${npm_prefix}/node_modules/.bin/markdownlint"
+
+          # ---- lint 実行（違反は stderr、非 0 終了） ----
+          out="${RUNNER_TEMP}/markdownlint.out"
+          set +e
+          "${markdownlint_bin}" "${globs[@]}" 2> "${out}"
+          rc=$?
+          set -e
+
+          # ---- 診断は reviewdog の有無にかかわらず必ずログへ出す ----
+          # 出力には呼び出し側リポジトリのファイル名が含まれるため、::stop-commands:: で
+          # 挟んで workflow command として解釈されないようにする
+          marker="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          echo "----- markdownlint diagnostics -----"
+          echo "::stop-commands::${marker}"
+          cat "${out}"
+          echo "::${marker}::"
+          echo "-----------------------------------"
+
+          # ---- 「lint ツール自体の失敗」を fail-open させないためのガード ----
+          # markdownlint-cli は違反検出も設定ファイル不正も同じ rc=1 を返すため、
+          # 終了コードだけでは区別できない。reviewdog モード（特に fail-level: none）
+          # では、解析できる診断行が 1 件も無いのに非 0 終了した場合、reviewdog は
+          # 何も報告せずジョブが緑になってしまう。診断行の有無で実行失敗を検知する
+          if [ "${rc}" -ne 0 ] && ! grep -qE ':[0-9]+[: ]' "${out}"; then
+            echo "::error::markdownlint の実行に失敗しました（診断行を 1 件も解析できませんでした。設定ファイル・引数を確認してください）"
+            echo "終了コード: ${rc}"
+            exit 1
+          fi
+
+          if [ "${use_rd}" -eq 0 ]; then
+            exit "${rc}"
+          fi
+
+          # reviewdog をステップ最後のコマンドにして終了コードを伝播させる
+          # （`|| true` で握り潰すと報告失敗がパスに見えてしまう）
+          reviewdog \
+            -efm='%f:%l:%c %m' \
+            -efm='%f:%l %m' \
+            -name='markdownlint' \
+            -reporter="${RD_REPORTER}" \
+            -filter-mode="${RD_FILTER_MODE}" \
+            -level="${RD_LEVEL}" \
+            -fail-level="${RD_FAIL_LEVEL}" \
+            < "${out}"
+
+  # ==========================================================================
+  # editorconfig-checker
+  # ==========================================================================
+  editorconfig:
+    name: editorconfig-checker
+    if: inputs.editorconfig
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # reviewdog を使わないため権限要件が無条件に決まる（checkout のみ）
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # editorconfig-checker バイナリを host に配置する（runs.using: node24 の
+      # 非コンテナ型 action のため self-hosted / DooD 構成でも動作する）
+      - name: Setup editorconfig-checker
+        uses: editorconfig-checker/action-editorconfig-checker@840e866d93b8e032123c23bac69dece044d4d84c # v2.2.0
+        with:
+          version: ${{ inputs.editorconfig-checker-version }}
+
+      # 除外・無効化ルールは呼び出し側リポジトリ直下の .editorconfig-checker.json を参照する
+      - name: Run editorconfig-checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          editorconfig-checker
+
+  # ==========================================================================
+  # yamllint（reviewdog 対応）
+  # ==========================================================================
+  yamllint:
+    name: yamllint
+    if: inputs.yamllint
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # job-level permissions は宣言しない（markdownlint ジョブと同じ理由）
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Setup reviewdog
+        if: inputs.reviewdog
+        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
+        with:
+          reviewdog_version: ${{ inputs.reviewdog-version }}
+
+      - name: Run yamllint
+        env:
+          YAMLLINT_VERSION: ${{ inputs.yamllint-version }}
+          YAMLLINT_TARGETS: ${{ inputs.yamllint-targets }}
+          YAMLLINT_CONFIG: ${{ inputs.yamllint-config }}
+          USE_REVIEWDOG: ${{ inputs.reviewdog }}
+          EVENT_NAME: ${{ github.event_name }}
+          IS_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
+          RD_REPORTER: ${{ inputs.reviewdog-reporter }}
+          RD_FILTER_MODE: ${{ inputs.reviewdog-filter-mode }}
+          RD_LEVEL: ${{ inputs.reviewdog-level }}
+          RD_FAIL_LEVEL: ${{ inputs.reviewdog-fail-level }}
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # ---- reviewdog 利用可否の判定（lint 実行前に fail-fast） ----
+          use_rd=0
+          if [ "${USE_REVIEWDOG}" = "true" ]; then
+            if [ "${EVENT_NAME}" != "pull_request" ]; then
+              echo "::error::reviewdog は pull_request イベントでのみ利用できます"
+              echo "push 等でも動かす wrapper では github.event_name で reviewdog input を切り替えてください"
+              echo "現在のイベント: ${EVENT_NAME}"
+              exit 1
+            fi
+            case "${RD_REPORTER}" in
+              github-pr-review | github-pr-check | github-check | local) ;;
+              *)
+                echo "::error::reviewdog-reporter が不正です"
+                echo "許可値: github-pr-review / github-pr-check / github-check / local"
+                echo "指定値: ${RD_REPORTER}"
+                exit 1
+                ;;
+            esac
+            if [ "${IS_FORK_PR}" = "true" ]; then
+              echo "::notice::fork からの PR のため reviewdog への報告を行わず、診断のログ出力のみにフォールバックします"
+            else
+              use_rd=1
+            fi
+          fi
+
+          # ---- 検査対象のパース（改行区切り → 配列） ----
+          targets=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            if [ -n "${line}" ]; then
+              targets+=("${line}")
+            fi
+          done <<< "${YAMLLINT_TARGETS}"
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "::error::yamllint-targets が空です"
+            exit 1
+          fi
+
+          # 設定ファイルは未指定なら -c を渡さず yamllint の自動探索に任せる
+          # （.yamllint / .yamllint.yaml / .yamllint.yml）
+          config_args=()
+          if [ -n "${YAMLLINT_CONFIG}" ]; then
+            if [ ! -f "${YAMLLINT_CONFIG}" ]; then
+              echo "::error::yamllint-config に指定されたファイルが存在しません"
+              echo "指定値: ${YAMLLINT_CONFIG}"
+              exit 1
+            fi
+            config_args+=(-c "${YAMLLINT_CONFIG}")
+          fi
+
+          python -m pip install --quiet "yamllint==${YAMLLINT_VERSION}"
+
+          # ---- lint 実行（yamllint は違反を stdout に出す） ----
+          out="${RUNNER_TEMP}/yamllint.out"
+          set +e
+          yamllint -f parsable "${config_args[@]+"${config_args[@]}"}" "${targets[@]}" \
+            > "${out}" 2>&1
+          rc=$?
+          set -e
+
+          marker="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          echo "----- yamllint diagnostics -----"
+          echo "::stop-commands::${marker}"
+          cat "${out}"
+          echo "::${marker}::"
+          echo "-------------------------------"
+
+          # ---- 「lint ツール自体の失敗」を fail-open させないためのガード ----
+          # yamllint は使い方の誤り（rc=2）・対象パス不在（rc=255）を違反検出（rc=1）と
+          # 区別するが、念のため診断行の有無でも判定する。reviewdog モード
+          # （特に fail-level: none）で「何も報告せず緑」になるのを防ぐ
+          if [ "${rc}" -gt 1 ] || { [ "${rc}" -ne 0 ] && ! grep -qE ':[0-9]+[: ]' "${out}"; }; then
+            echo "::error::yamllint の実行に失敗しました（設定ファイル・対象パス・引数を確認してください）"
+            echo "終了コード: ${rc}"
+            exit 1
+          fi
+
+          if [ "${use_rd}" -eq 0 ]; then
+            exit "${rc}"
+          fi
+
+          reviewdog \
+            -efm='%f:%l:%c: %m' \
+            -name='yamllint' \
+            -reporter="${RD_REPORTER}" \
+            -filter-mode="${RD_FILTER_MODE}" \
+            -level="${RD_LEVEL}" \
+            -fail-level="${RD_FAIL_LEVEL}" \
+            < "${out}"
+
+  # ==========================================================================
+  # commitlint（Conventional Commits 検証）
+  # ==========================================================================
+  commitlint:
+    name: commitlint
+    if: inputs.commitlint
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # reviewdog を使わないため権限要件が無条件に決まる（checkout のみ）
+    permissions:
+      contents: read
+    steps:
+      # PR の commit 範囲を辿るため全履歴が必要
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Validate PR commits
+        env:
+          COMMITLINT_VERSION: ${{ inputs.commitlint-version }}
+          COMMITLINT_CONFIG_VERSION: ${{ inputs.commitlint-config-version }}
+          COMMITLINT_EXTENDS: ${{ inputs.commitlint-extends }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # commit 範囲は PR の base/head から取るため pull_request 以外では成立しない。
+          # 黙って全 commit を検証したり skip したりせず fail-closed で止める
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "::error::commitlint は pull_request イベントでのみ利用できます"
+            echo "push 等でも動かす wrapper では github.event_name で commitlint input を切り替えてください"
+            echo "現在のイベント: ${EVENT_NAME}"
+            exit 1
+          fi
+          if [ -z "${BASE_SHA}" ] || [ -z "${HEAD_SHA}" ]; then
+            echo "::error::PR の base/head SHA を取得できませんでした"
+            exit 1
+          fi
+
+          # 呼び出し側リポジトリに commitlint 設定が無くても動くよう --extends を渡す
+          # （設定がある場合はそちらのルールも併用される）。空指定なら渡さない
+          extends_args=()
+          if [ -n "${COMMITLINT_EXTENDS}" ]; then
+            extends_args+=(--extends "${COMMITLINT_EXTENDS}")
+          fi
+
+          npx --yes \
+            -p "@commitlint/cli@${COMMITLINT_VERSION}" \
+            -p "@commitlint/config-conventional@${COMMITLINT_CONFIG_VERSION}" \
+            commitlint \
+            "${extends_args[@]+"${extends_args[@]}"}" \
+            --from "${BASE_SHA}" \
+            --to "${HEAD_SHA}" \
+            --verbose
