@@ -245,6 +245,9 @@ jobs:
           #   - 中間ディレクトリ欠落（PR がディレクトリごと削除・移動した場合）は
           #     symlink 検査済みの上で mkdir -p 再作成し、リダイレクト失敗による
           #     ジョブ異常終了を防ぐ
+          # base 側のオブジェクトモードも関数内で検証する（通常ファイル以外の base 内容
+          # —— symlink blob のリンク先文字列等 —— を working tree へ書き出さない。
+          # prompt / schema の resolve と同じ「欠落は許容・不正は拒否」の契約）
           normalize_working_tree() {
             f="$1"
             d="$(dirname "$f")"
@@ -255,8 +258,12 @@ jobs:
               fi
               d="$(dirname "${d}")"
             done
-            rm -rf "$f"
             mode="$(git ls-tree "${BASE_SHA}" -- "$f" | awk '{print $1}')"
+            if [ -n "${mode}" ] && [ "${mode}" != "100644" ] && [ "${mode}" != "100755" ]; then
+              echo "::error::base コミット ${BASE_SHA} 時点の $f が通常ファイルではありません（mode=${mode}。symlink・gitlink を拒否）"
+              exit 1
+            fi
+            rm -rf "$f"
             if [ -n "${mode}" ]; then
               mkdir -p "$(dirname "$f")"
               git show "${BASE_SHA}:$f" > "$f"
@@ -269,12 +276,7 @@ jobs:
           # AGENTS.md / AGENTS.override.md も同じ理由で base に揃える（AGENTS.md は
           # CLI の project-doc 自動読込対象でもある。AGENTS.override.md は walk 順で
           # AGENTS.md より優先されるため、base の状態に関わらず削除・正規化の対象に
-          # 含める）。base 側がモード不正の場合は拒否する
-          agents_mode="$(git ls-tree "${BASE_SHA}" -- AGENTS.md | awk '{print $1}')"
-          if [ -n "${agents_mode}" ] && [ "${agents_mode}" != "100644" ] && [ "${agents_mode}" != "100755" ]; then
-            echo "::error::base コミット ${BASE_SHA} 時点の AGENTS.md が通常ファイルではありません（mode=${agents_mode}。symlink を拒否）"
-            exit 1
-          fi
+          # 含める）。base 側のモード検証は normalize_working_tree 内で行われる
           normalize_working_tree "AGENTS.md"
           normalize_working_tree "AGENTS.override.md"
           echo "working tree 上の制御ファイル（prompt / schema / AGENTS.md / AGENTS.override.md）を base 版へ正規化しました"
@@ -322,11 +324,15 @@ jobs:
           fi
           echo "資格情報パターン: 検出なし"
 
-      # jq -c で単一行 JSON へ正規化してジョブ出力にする（不正 JSON はここで fail し、
-      # post_feedback は投稿対象なしとして skip される）
+      # 単一行 JSON へ正規化してジョブ出力にする（不正 JSON はここで fail し、
+      # post_feedback は投稿対象なしとして skip される）。JSON 処理は jq ではなく
+      # node で行う: 最小構成の codex 専用 runner には jq が無い可能性があるが、
+      # node は本ジョブの setup-node が必ず導入するため追加の runner 要件を増やさない
       - name: Collect final message
         id: collect
-        run: echo "final_message=$(jq -c . "$RUNNER_TEMP/codex-review.json")" >> "$GITHUB_OUTPUT"
+        run: |
+          final_message="$(node -e 'process.stdout.write(JSON.stringify(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))))' "$RUNNER_TEMP/codex-review.json")"
+          echo "final_message=${final_message}" >> "$GITHUB_OUTPUT"
 
       # レビュー手順自体が完遂したかを P0/P1 判定より先に確認する（fail-closed）。
       # `Collect final message` の後に置くことで、gate 失敗時も final_message は
@@ -337,7 +343,7 @@ jobs:
       # 対処。Fandhe-AI/fandhe-backend イシュー #524 で導入）
       - name: Gate on review completion
         run: |
-          completed="$(jq -r '.review_completed == true' "$RUNNER_TEMP/codex-review.json")"
+          completed="$(node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(r.review_completed === true))' "$RUNNER_TEMP/codex-review.json")"
           if [ "${completed}" != "true" ]; then
             echo "::error::Codex レビューが完了していません（review_completed != true。理由は PR コメントの summary 参照）"
             exit 1
@@ -346,7 +352,7 @@ jobs:
 
       - name: Gate on P0/P1 findings
         run: |
-          count="$(jq '[.findings[] | select(.priority == "P0" or .priority == "P1")] | length' "$RUNNER_TEMP/codex-review.json")"
+          count="$(node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((r.findings ?? []).filter(f => f && (f.priority === "P0" || f.priority === "P1")).length))' "$RUNNER_TEMP/codex-review.json")"
           if [ "${count}" -gt 0 ]; then
             echo "::error::Codex レビューで P0/P1 指摘が ${count} 件検出されました（詳細は PR コメント参照）"
             exit 1
