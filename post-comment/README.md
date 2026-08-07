@@ -109,4 +109,4 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 - **PAT の有効期限**: fine-grained PAT は最大1年。定期ローテーション推奨
 - **PAT 発行者の異動・退職**: 再発行が必要
-- **`actions` リポジトリのアクセス**: org の Settings → Actions → General でプライベートリポジトリからの Action 共有を許可する必要あり
+- **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の利用が制限されている場合は許可が必要

@@ -107,5 +107,6 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 - **PATH の反映タイミング**: 新規インストール時は `$GITHUB_PATH` へ
   `~/.cargo/bin` を追記する。反映は後続ステップからのため、同一ステップ内で
   続けて cargo を呼ぶ構成にはしない（本アクション内部はステップ分割済みで問題ない）
-- **`actions` リポジトリのアクセス**: org の Settings → Actions → General で
-  プライベートリポジトリからの Action 共有を許可する必要あり
+- **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
+  ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
+  利用が制限されている場合は許可が必要
