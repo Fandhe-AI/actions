@@ -65,32 +65,37 @@ runs:
         # gh の一時障害でラベル処理（存在確認・作成・更新）に失敗しても、重複判定・
         # 起票の本処理は続行する（警告のみ。移植元の ci.yml dep-audit /
         # bench-schedule.yml の「ラベル作成失敗は警告のみ」方針と整合）。
+        # ただし存在確認自体の失敗時は、コールドスタート（ラベル未存在）だと後続の
+        # `gh issue create --label` が存在しないラベルを理由に失敗してしまうため、
+        # スキップではなく `--force` なしの `gh label create` を試みるフォールバック
+        # とする（既存なら already exists で失敗するが警告のみで続行 → 既存ラベルの
+        # 色を変異させない性質は維持。未存在なら作成され起票が通る）。
+        create_args=()
+        if [ -n "${LABEL_COLOR}" ]; then
+          create_args+=(--color "${LABEL_COLOR}")
+        fi
+        if [ -n "${LABEL_DESCRIPTION}" ]; then
+          create_args+=(--description "${LABEL_DESCRIPTION}")
+        fi
         if label_names="$(gh label list --limit 1000 --json name --jq '.[].name')"; then
           if printf '%s\n' "${label_names}" | grep -qxF "${LABEL}"; then
-            edit_args=()
-            if [ -n "${LABEL_COLOR}" ]; then
-              edit_args+=(--color "${LABEL_COLOR}")
-            fi
-            if [ -n "${LABEL_DESCRIPTION}" ]; then
-              edit_args+=(--description "${LABEL_DESCRIPTION}")
-            fi
-            if [ "${#edit_args[@]}" -gt 0 ]; then
-              gh label edit "${LABEL}" "${edit_args[@]}" \
+            # 既存ラベル: color / description が明示されている場合のみ該当項目を更新する
+            # （--color / --description は create と同じフラグ体系のため配列を共用）。
+            if [ "${#create_args[@]}" -gt 0 ]; then
+              gh label edit "${LABEL}" "${create_args[@]}" \
                 || echo "警告: ラベル ${LABEL} の更新に失敗しました（本処理は続行します）" >&2
             fi
           else
-            create_args=()
-            if [ -n "${LABEL_COLOR}" ]; then
-              create_args+=(--color "${LABEL_COLOR}")
-            fi
-            if [ -n "${LABEL_DESCRIPTION}" ]; then
-              create_args+=(--description "${LABEL_DESCRIPTION}")
-            fi
             gh label create "${LABEL}" ${create_args[@]+"${create_args[@]}"} \
               || echo "警告: ラベル ${LABEL} の作成に失敗しました（本処理は続行します）" >&2
           fi
         else
-          echo "警告: ラベル一覧の取得に失敗したためラベル処理をスキップします（本処理は続行します）" >&2
+          # 存在確認の失敗時フォールバック: `--force` なしの create を試みる。
+          # 既存ラベルなら already exists で失敗するが警告のみで続行し（色は不変）、
+          # 未存在（コールドスタート）なら作成されて後続の起票が通る。
+          echo "警告: ラベル一覧の取得に失敗しました。ラベル作成を試行します（既存なら失敗しても続行します）" >&2
+          gh label create "${LABEL}" ${create_args[@]+"${create_args[@]}"} \
+            || echo "警告: ラベル ${LABEL} の作成に失敗しました（本処理は続行します）" >&2
         fi
 
         # 重複起票防止: 同一検索条件 + 同一ラベルの open Issue が既にあれば起票しない。
