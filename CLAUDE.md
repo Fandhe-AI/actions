@@ -4,22 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## リポジトリ概要
 
-Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions を管理するリポジトリ。
+Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・reusable workflow を
+管理するリポジトリ。
 
 ## アーキテクチャ
 
-- 各アクションは独自のディレクトリに `action.yml` + `README.md` のペアで構成
-- すべて Composite Action（`runs.using: composite`）で、bash + `gh` CLI のみで実装（Docker/Node.js 不使用）
+- **Composite Action**: 各アクションは独自のディレクトリに `action.yml` + `README.md` の
+  ペアで構成。bash + `gh` CLI のみで実装（Docker/Node.js 不使用）
+- **Reusable workflow**（`.github/workflows/`）: 複数ジョブ・runner 選択・permissions 分離を
+  要するものは `on: workflow_call` の reusable workflow として提供する（第 1 号: codex-review）。
+  付随ファイル（既定設定・prompt 等）と README は Composite Action と同様に専用ディレクトリ
+  （例: `codex-review/`）へ置く。Composite Action の「Docker/Node.js 不使用」規約は reusable
+  workflow には適用しない（例: codex-review は `actions/setup-node` + npm でジョブ内に CLI を
+  導入する）が、action / CLI のバージョンは SHA・バージョン固定とする
 - 入力値は `env:` 経由でシェル変数に渡す（`${{ inputs.* }}` を直接 `run:` に埋め込まない）
 
 ## アクション一覧
 
-| ディレクトリ | 用途 |
-|---|---|
-| `post-comment/` | Issue/PR へのコメント投稿（`gh issue comment`） |
-| `project-sync/` | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
-| `submodule-update/` | git submodule を最新に追従させ、変更があれば PR を自動作成 |
-| `skills-update/` | `npx skills` 導入のエージェントスキルを最新に更新し、変更があれば PR を自動作成 |
+| ディレクトリ | 形態 | 用途 |
+|---|---|---|
+| `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
+| `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
+| `submodule-update/` | Composite Action | git submodule を最新に追従させ、変更があれば PR を自動作成 |
+| `skills-update/` | Composite Action | `npx skills` 導入のエージェントスキルを最新に更新し、変更があれば PR を自動作成 |
+| `codex-review/` | Reusable workflow | OpenAI Codex CLI による PR 自動レビュー（codex-home 認証・2 段 fail-closed gate・多層防御。workflow 本体は `.github/workflows/codex-review.yml`） |
 
 ## コミット規約
 
