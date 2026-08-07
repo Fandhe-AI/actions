@@ -79,6 +79,9 @@ jobs:
           name: pages-dist
           path: ${{ runner.temp }}/dist
           if-no-files-found: error
+          # .nojekyll・.well-known 等の dotfile を配信する場合は必須（既定 false では
+          # upload 段階で脱落する。deploy 側の hidden files 対応は共通側が常時有効）
+          include-hidden-files: true
 
   deploy:
     needs: build
@@ -134,6 +137,12 @@ gh api repos/actions/deploy-pages/git/tags/<tag-object-sha> --jq '.object.sha'
   reusable workflow 側の permissions 定義は呼び出し側が付与した権限を絞る方向にしか働かない
 - `actions/upload-artifact` は path 直下の内容を artifact ルートへ置く（共通の親ディレクトリを
   strip する）。`dist-dir` は「artifact 内の」相対パスであり、runner 上のパスではない
+- **dotfile（`.nojekyll`・`.well-known` 等）を配信するには upload 側・deploy 側の双方で
+  hidden files を含める必要がある**。deploy 側（`upload-pages-artifact`）は本 workflow が
+  `include-hidden-files: true` を常時有効にしているため、呼び出し側は `actions/upload-artifact`
+  に `include-hidden-files: true` を指定するだけでよい（既定 false のままだと upload 段階で
+  脱落しサイレントに未配信になる）。なお `.git` / `.github` は `upload-pages-artifact` が
+  設定に関わらず常時除外する
 - 同一 run 内で artifact 名が衝突しないよう、build ジョブを複数持つ場合は `artifact-name` を
   ジョブごとに変える
 - Pages の Source 未設定・environment `github-pages` の保護ルール（deployment branch

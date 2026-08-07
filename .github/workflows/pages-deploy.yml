@@ -121,10 +121,15 @@ jobs:
       # 要: runner に tar がインストール済み（upload-pages-artifact が内部で使用。
       #     Linux self-hosted プールでは通常常設）
       # 直前ステップで dist-dir 検査済みのため、ここでのパス合成は安全
+      # include-hidden-files: v5 の既定は false で、.nojekyll・.well-known 等の
+      # dotfile が tar から脱落しサイレントに未配信になるため常時 true にする
+      # （.git / .github は本 input の値に関わらず action 側が常時除外する。
+      # 呼び出し側の upload-artifact でも同 input の指定が必要な点は README 参照）
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: ${{ runner.temp }}/pages-dist/${{ inputs.dist-dir }}
+          include-hidden-files: true
 
       - name: Deploy
         id: deployment
