@@ -25,6 +25,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 |---|---|---|
 | `cargo-tool-install/` | Composite Action | cargo ツールのバージョン固定（`--locked`）・冪等インストール |
 | `wasm-tool-install/` | Composite Action | `wasm-bindgen-cli` / `wasm-pack` のバージョン固定 + SHA256 検証 + atomic install（rename）による冪等導入 |
+| `rust-toolchain-setup/` | Composite Action | self-hosted runner 上での rustup 自己修復と `rust-toolchain.toml` へのツールチェーン同期（`components` で追加コンポーネントを冪等インストール） |
 | `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
 | `idempotent-issue/` | Composite Action | ラベル冪等作成 → 重複検索 → 未存在時のみ Issue 起票（`gh label create` / `gh issue list` / `gh issue create`） |
 | `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
@@ -47,6 +48,18 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 
 ```yaml
 uses: Fandhe-AI/actions/post-comment@<SHA> # main
+```
+
+reusable workflow も同様に SHA 固定で参照する:
+
+```yaml
+uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+```
+
+最新 SHA の取得（private リポジトリのため認証済み gh CLI を使う）:
+
+```bash
+gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 ```
 
 ## README 規約
@@ -95,6 +108,15 @@ main コンテキストの消費を抑えるため、調査・実装・レビュ
 | implement | `docs-writer` | haiku | README / CLAUDE.md の作成・更新 |
 | quality | `reviewer` | sonnet | 変更差分の品質・規約準拠レビュー |
 | quality | `security-auditor` | sonnet | OWASP + GitHub Actions 特有のセキュリティ監査 |
+
+## Docs
+
+`docs/` 配下（組織横断の方針。消費側リポジトリからも参照される）:
+
+| ファイル | 内容 |
+|---|---|
+| `runner-policy.md` | 組織 runner 方針（public は GitHub ホステッド / private は self-hosted、対象リポジトリ一覧、codex-review 例外） |
+| `codex-review-runner-exception.md` | codex-review runner 例外の適用ガイド（適用条件の担保責任、public 向け wrapper、例外が及ばない範囲、消費側規約からの参照方法） |
 
 ## Rules
 

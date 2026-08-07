@@ -145,8 +145,9 @@ curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-
 `actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
 
 ```bash
-# actions リポジトリの最新コミット SHA を取得
-git ls-remote https://github.com/Fandhe-AI/actions.git HEAD
+# actions リポジトリの main 最新コミット SHA を取得
+# （本リポジトリは private のため、認証済み gh CLI で解決する）
+gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 
 # ワークフロー内の SHA を新しい値に置き換え
 ```
