@@ -1,0 +1,126 @@
+name: GitHub Pages deploy (reusable)
+
+# GitHub Pages への deploy を共通化する reusable workflow。
+# Fandhe-AI/fandhe-backend の docs-site.yml（build → upload-pages-artifact → deploy-pages）の
+# deploy 部分を workflow_call 化して移設したもの。build はリポジトリごとに言語・SSG が
+# 異なるため呼び出し側に残し、成果物（dist）の受け渡し以降を本 workflow が担う。
+#
+#   jobs:
+#     deploy:
+#       needs: build
+#       permissions:
+#         pages: write
+#         id-token: write
+#       uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+#       with:
+#         dist-dir: "."
+#
+# 設計の要点:
+# - artifact 連携: reusable workflow のジョブは呼び出し側ジョブとファイルシステムを
+#   共有しないため、dist の受け渡しは artifact 経由が唯一の手段。呼び出し側 build ジョブは
+#   汎用の actions/upload-artifact で dist をアップロードし（既定名: pages-dist）、本 workflow が
+#   download → actions/upload-pages-artifact（Pages 専用形式への変換）→ actions/deploy-pages を
+#   すべて担う。Pages 固有の action・permissions・environment 定義とその SHA 固定運用を
+#   共通側へ集約し、呼び出し側には汎用 upload 1 ステップだけを残す（設計比較は
+#   pages-deploy/README.md 参照）
+# - permissions は本 workflow のジョブレベルで最小定義する（pages: write / id-token: write）。
+#   reusable workflow は呼び出し側が付与した以上の権限を持てないため、呼び出し側 wrapper の
+#   `uses:` ジョブにも同じ 2 権限の付与が必要（README のセットアップ例参照）
+# - dist-dir（artifact 内の公開ルートへの相対パス）は絶対パス・`..`/`.` セグメントを
+#   fail-closed で拒否し、ダウンロード先の外を公開対象にする経路を塞ぐ
+# - 空ディレクトリ・解決失敗を黙って公開しない（公開ルートの存在・非空を検証してから
+#   upload する fail-closed 構成）
+# - concurrency は reusable workflow のトップレベルでは機能しないため、呼び出し側 wrapper で
+#   設定する（Pages はデプロイ中断で中途半端な公開状態になりうるため
+#   cancel-in-progress: false を推奨。README の wrapper 例参照）
+#
+# 前提（手動操作）: 呼び出し側リポジトリの Settings → Pages → Source を
+# "GitHub Actions" に設定済みであること。未設定の場合 deploy ジョブのみが失敗する。
+# CLI で有効化する場合: gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
+
+on:
+  workflow_call:
+    inputs:
+      dist-dir:
+        description: >-
+          ダウンロードした artifact 内での公開ルート（サイトの root）への相対パス。
+          呼び出し側が upload-artifact の path に dist ディレクトリ自体を指定した場合、
+          artifact のルートがそのまま公開ルートになるため "." を指定する
+        type: string
+        required: true
+      artifact-name:
+        description: 呼び出し側 build ジョブが actions/upload-artifact でアップロードした artifact 名
+        type: string
+        required: false
+        default: pages-dist
+      runner-label:
+        description: deploy ジョブを実行する runner ラベル（fandhe 系リポジトリは self-hosted 前提）
+        type: string
+        required: false
+        default: self-hosted
+      timeout-minutes:
+        description: deploy ジョブの timeout（分）
+        type: number
+        required: false
+        default: 10
+
+jobs:
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Pages デプロイに必要な最小権限のみをジョブレベルで定義する
+    # （checkout 不要のため contents: read も持たない）
+    permissions:
+      pages: write # Pages デプロイ作成に必要
+      id-token: write # OIDC によるデプロイ元検証に必要
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # 呼び出し側 build ジョブがアップロードした dist（汎用 artifact）を取得する。
+      # 展開先は self-hosted runner の永続 workspace を汚さないよう $RUNNER_TEMP 配下
+      # （ジョブ終了時に破棄され、stale 生成物の混入も避けられる）
+      - name: Download dist artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/pages-dist
+
+      # dist-dir の健全性検査 + 公開ルートの実在検証（fail-closed）。
+      # 絶対パス・`..`/`.` セグメントはダウンロード先の外（runner 上の任意パス）を
+      # 公開対象へ転用しうるため拒否する。解決後のディレクトリが存在しない・空の場合も
+      # 黙って空サイトを公開せずここで失敗させる
+      - name: Verify dist directory
+        env:
+          DIST_DIR: ${{ inputs.dist-dir }}
+        run: |
+          case "/${DIST_DIR}/" in
+            //*|*/../*|*/./*)
+              echo "::error::不正な dist-dir です: ${DIST_DIR}（絶対パス・.. ・. セグメントを拒否。artifact ルートを指す場合は \".\" を指定）"
+              exit 1
+              ;;
+          esac
+          site_root="${RUNNER_TEMP}/pages-dist/${DIST_DIR}"
+          if [ ! -d "${site_root}" ]; then
+            echo "::error::artifact 内に dist-dir が見つかりません: ${DIST_DIR}（upload-artifact の path と dist-dir の対応を確認してください）"
+            exit 1
+          fi
+          if [ -z "$(ls -A "${site_root}")" ]; then
+            echo "::error::公開ルートが空です: ${DIST_DIR}（空サイトの公開を中止します）"
+            exit 1
+          fi
+          echo "公開ルートを確認: ${site_root}"
+
+      # 汎用 artifact を Pages 専用形式（単一 tar の artifact 名 github-pages）へ変換する。
+      # 要: runner に tar がインストール済み（upload-pages-artifact が内部で使用。
+      #     Linux self-hosted プールでは通常常設）
+      # 直前ステップで dist-dir 検査済みのため、ここでのパス合成は安全
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/pages-dist/${{ inputs.dist-dir }}
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
