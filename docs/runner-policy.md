@@ -8,10 +8,14 @@ Fandhe-AI Organization における GitHub Actions の runner 選択方針。
 
 リポジトリの**可視性**で runner を決める。
 
-| リポジトリの可視性 | 使用する runner | 理由 |
-|---|---|---|
-| public | GitHub ホステッド（`ubuntu-latest` 等） | fork PR で untrusted なコードが実行されうるため、使い捨て環境で隔離する。public リポジトリは Actions の実行時間が無料 |
-| private | self-hosted runner | private リポジトリは GitHub ホステッドの実行時間が従量課金。fork PR の経路が実質存在せず、永続環境（toolchain キャッシュ等）の利点を取れる |
+| リポジトリの可視性 | 使用する runner |
+|---|---|
+| public | GitHub ホステッド（`ubuntu-latest` 等） |
+| private | self-hosted runner |
+
+public 側で GitHub ホステッドを使う根拠として、fork からの PR で untrusted なコードを
+self-hosted runner 上で実行しないことが挙げられる（`.github/workflows/codex-review.yml`
+のコメント参照）。
 
 ### 記述例
 
@@ -69,8 +73,10 @@ jobs:
   - ジョブユーザーに passwordless sudo を与えない
   - 信頼できないリポジトリへ runner を共有しない
 
-この例外は codex-review の codex 実行ジョブに限る。PR コメント投稿など資格情報に触れない
-ジョブ（`post-feedback-runner-label`）は、上表の方針どおり呼び出し側の可視性に従う。
+この例外は codex-review の codex 実行ジョブ（`runner-label`、既定値 `codex`）に限る。
+PR コメント投稿など資格情報に触れないジョブ（`post-feedback-runner-label`）は、上表の方針どおり
+呼び出し側の可視性に従う。ただし既定値が `self-hosted` であるため、**public リポジトリから
+呼び出す場合は `post-feedback-runner-label: ubuntu-latest` を明示的に渡すこと**。
 
 ## 4. 本リポジトリの reusable workflow との関係
 
@@ -80,8 +86,12 @@ jobs:
 
 | 呼び出し側 | 渡すラベル |
 |---|---|
-| public リポジトリ | `ubuntu-latest`（codex-review の codex ジョブのみ例外的に self-hosted ラベル） |
-| private リポジトリ | `self-hosted`（または絞り込んだ独自ラベル） |
+| public リポジトリ | `ubuntu-latest` を**明示的に指定**（codex-review の codex ジョブのみ例外的に self-hosted な codex 専用ラベル） |
+| private リポジトリ | `self-hosted`（または絞り込んだ独自ラベル）。既定値のままで方針に合致 |
+
+**注意**: `pages-deploy` の `runner-label` と `codex-review` の `post-feedback-runner-label` は
+いずれも既定値が `self-hosted` である。既定値は private リポジトリを前提としているため、
+public リポジトリから呼び出す場合は方針に合わせてラベルを明示的に渡す必要がある。
 
 なお `rust-toolchain-setup` は self-hosted runner の永続環境で rustup を自己修復する
 Composite Action であり、private リポジトリ側での利用を想定している
