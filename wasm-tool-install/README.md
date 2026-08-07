@@ -115,7 +115,9 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 |---|---|
 | `install-dir` | バイナリを配置したディレクトリの絶対パス |
 
-## SHA256 の調べ方
+## tarball チェックサムの調べ方
+
+`sha256` 入力に渡す値の求め方です（次節の「Action の SHA 固定」とは別物なので注意）。
 
 `wasm-bindgen` は各 asset に `.sha256sum` を併載しています：
 
@@ -130,7 +132,7 @@ curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-
   | sha256sum
 ```
 
-## SHA の更新方法
+## Action の SHA 固定と更新方法
 
 セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
 `actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
@@ -160,3 +162,7 @@ git ls-remote https://github.com/Fandhe-AI/actions.git HEAD
   経路に切り替わります（GNU / BSD 双方で入れ子配置は発生しません）
 - **`install-root` は絶対パスのみ**: 相対パスは拒否します。既定は `$HOME/.local/share` で、
   `sudo` を必要としません
+- **入力検証**: 全入力は `env:` 経由で受け取り、文字列全体に対する照合で形式を検証します。
+  改行を含む値は拒否し、診断出力の際も制御文字を除去するため、`inputs` が
+  `github.event.*` 由来であっても workflow command（`::error::` 等）を注入できません
+- **`sha256` は大文字・小文字どちらでも可**: 内部で小文字へ正規化して照合します

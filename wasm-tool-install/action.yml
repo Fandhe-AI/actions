@@ -1,7 +1,7 @@
 name: WASM Tool Install
 description: >-
   wasm-bindgen-cli / wasm-pack のプリビルトバイナリを、バージョン固定 + SHA256 検証 +
-  atomic install（mv -T）で冪等に導入する
+  atomic install（rename）で冪等に導入する
 
 inputs:
   tool:
@@ -53,37 +53,52 @@ runs:
       run: |
         set -euo pipefail
 
+        # ユーザー入力を診断目的で出力するときは、必ず制御文字（改行・復帰など）を
+        # 取り除いてから出力する。security.md の「ユーザー由来の値は別の echo 行へ
+        # 分離する」だけでは、値そのものに改行が含まれる場合に行を分けた意味がなく、
+        # 値の中から任意の workflow command 行（`::error::` 等）を生成できてしまう。
+        sanitize() {
+          printf '%s' "$1" | tr -d '[:cntrl:]'
+        }
+
         # 入力の形式検証（fail-closed）。値はすべて env 経由で受け取り、
         # パス・URL・引数位置へ渡す前に許容文字を制限する。
         # エラー出力は workflow command 注入を避けるため、`::error::` 行には
         # 静的な文言のみを置き、ユーザー由来の値は別 echo 行へ分離する。
+        #
+        # 検証には `grep -E` ではなく bash の `[[ =~ ]]` を使う。grep は入力を
+        # 行単位で照合するため、`1.2.3\n::error::...` のような改行入りの値でも
+        # 1 行目が一致すれば通過してしまい、後段の echo で任意の workflow command
+        # を注入されうる（inputs が github.event.* 由来の場合に現実的な経路）。
+        # `[[ =~ ]]` は文字列全体に対する照合で、許容文字集合に改行を含めていない
+        # ため、この多行バイパスが成立しない。
         case "${TOOL}" in
           wasm-bindgen|wasm-pack) ;;
           *)
             echo "::error::tool が不正です（wasm-bindgen / wasm-pack のみ許容）"
-            echo "受け取った tool: ${TOOL}"
+            echo "受け取った tool: $(sanitize "${TOOL}")"
             exit 1
             ;;
         esac
-        if ! printf '%s' "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$'; then
+        if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$ ]]; then
           echo "::error::version が不正です（semver 形式・v 接頭辞なしのみ許容）"
-          echo "受け取った version: ${VERSION}"
+          echo "受け取った version: $(sanitize "${VERSION}")"
           exit 1
         fi
-        if ! printf '%s' "${SHA256}" | grep -qE '^[0-9a-fA-F]{64}$'; then
+        if [[ ! "${SHA256}" =~ ^[0-9a-fA-F]{64}$ ]]; then
           echo "::error::sha256 が不正です（64 桁の 16 進数のみ許容）"
           exit 1
         fi
-        if ! printf '%s' "${TARGET}" | grep -qE '^[0-9A-Za-z_][0-9A-Za-z_.-]*$'; then
+        if [[ ! "${TARGET}" =~ ^[0-9A-Za-z_][0-9A-Za-z_.-]*$ ]]; then
           echo "::error::target が不正です（target triple として許容されない文字を含みます）"
-          echo "受け取った target: ${TARGET}"
+          echo "受け取った target: $(sanitize "${TARGET}")"
           exit 1
         fi
         case "${ADD_TO_PATH}" in
           true|false) ;;
           *)
             echo "::error::add-to-path が不正です（true / false のみ許容）"
-            echo "受け取った add-to-path: ${ADD_TO_PATH}"
+            echo "受け取った add-to-path: $(sanitize "${ADD_TO_PATH}")"
             exit 1
             ;;
         esac
@@ -91,15 +106,15 @@ runs:
         # install-root 未指定時は $HOME/.local/share を既定とする。
         # inputs の default 値は式コンテキストで評価されるため $HOME を解決できない。
         # そのため default は空文字にし、ここでシェル側でフォールバックする。
+        # 絶対パスであることに加え、制御文字（特に改行）を含まないことを要求する。
+        # install_root は配置先パスの一部として後段の echo に現れるため、改行を
+        # 許すと workflow command を注入されうる。
         install_root="${INSTALL_ROOT:-${HOME}/.local/share}"
-        case "${install_root}" in
-          /*) ;;
-          *)
-            echo "::error::install-root は絶対パスで指定してください"
-            echo "受け取った install-root: ${install_root}"
-            exit 1
-            ;;
-        esac
+        if [[ ! "${install_root}" =~ ^/[^[:cntrl:]]*$ ]]; then
+          echo "::error::install-root は制御文字を含まない絶対パスで指定してください"
+          echo "受け取った install-root の長さ: ${#install_root}"
+          exit 1
+        fi
 
         # ツールごとの差分テーブル。release tag の付け方・展開後ディレクトリ名・
         # 「揃っていることを確認すべきバイナリの組」だけがツール間の差分である。
@@ -138,13 +153,17 @@ runs:
           return 0
         }
 
+        # sha256sum / shasum は照合を文字列比較で行うため、大文字で渡された
+        # チェックサムは正しくても不一致になる。ここで小文字へ正規化しておく。
+        expected_sha256="$(printf '%s' "${SHA256}" | tr 'A-Z' 'a-z')"
+
         # SHA256 の照合。sha256sum が無い環境（macOS runner 等）では shasum -a 256 を使う。
         verify_checksum() {
           local file="$1"
           if command -v sha256sum >/dev/null 2>&1; then
-            printf '%s  %s\n' "${SHA256}" "${file}" | sha256sum -c -
+            printf '%s  %s\n' "${expected_sha256}" "${file}" | sha256sum -c -
           elif command -v shasum >/dev/null 2>&1; then
-            printf '%s  %s\n' "${SHA256}" "${file}" | shasum -a 256 -c -
+            printf '%s  %s\n' "${expected_sha256}" "${file}" | shasum -a 256 -c -
           else
             echo "::error::SHA256 を検証できません（sha256sum / shasum のいずれも見つかりません）"
             return 1
