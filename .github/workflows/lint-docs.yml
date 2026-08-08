@@ -646,6 +646,10 @@ jobs:
   lint-docs-complete:
     name: lint-docs-complete
     runs-on: ${{ inputs.runner-label }}
+    # needs.*.result の検証のみで GitHub API・リポジトリ内容へ一切アクセスしないため、
+    # 呼び出し側が reviewdog 用に付与した pull-requests: write 等を継承しないよう
+    # 空 permissions で明示的に無効化する（権限最小化）。
+    permissions: {}
     # 失敗・スキップ時にも必ず実行して fail-closed で判定する
     # （bare needs では failure 時に本ジョブ自体が skipped になり、required check が
     # 「pending のまま」という分かりにくい壊れ方をするため）。
