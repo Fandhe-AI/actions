@@ -234,4 +234,5 @@ SHA 更新で workflow 本体と既定制御ファイルが常に一緒に切り
 | `bwrap: No permissions to create a new namespace` | unprivileged user namespace が禁止されている | seccomp / AppArmor プロファイルで userns 作成を許可する（「runner 構築」参照） |
 | `@openai/codex` のインストールに失敗する | runner から `registry.npmjs.org` へ到達できない | runner のネットワーク・プロキシ設定を確認する |
 | 認証エラーでレビューが失敗する | `CODEX_HOME` の refresh token 失効、または `auth.json` が read-only マウント | ホストで `codex login --device-auth` を再実行し、read-write マウントであることを確認する |
+| `review_completed != true` の gate 失敗（summary に `Read-only file system` への言及） | read-only sandbox 下でモデルがファイルへのリダイレクト等の書き込みを試みた（sandbox の正常動作。イシュー #49 で同梱既定 prompt に書き込み禁止の明示と組み替え続行の指示を追加済み） | wrapper の `uses: ...@<SHA>` を対策込みの SHA へ追随する。カスタム prompt 利用時は同等の「実行環境の制約」節を自前の prompt へ反映する |
 | public リポジトリでコメント投稿ジョブが runner 待ちになる | `post-feedback-runner-label` が既定値 `self-hosted` のまま | public 用テンプレートを使い `ubuntu-latest` を渡す |
