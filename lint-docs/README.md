@@ -12,6 +12,11 @@ commitlint）を束ねた reusable workflow。各リポジトリで個別実装�
   private（self-hosted）の両文化圏から利用できる
 - 使用する外部 action はすべてコミット SHA 固定。lint ツール本体のバージョンも
   既定値で固定し、`latest` を使わない（サプライチェーン対策）
+- **完遂判定用の集約ジョブ `lint-docs-complete`** を持つ。branch protection / ruleset の
+  required status check には本ジョブ（呼び出し側から見た名前は
+  `<呼び出し側 job id> / lint-docs-complete`、例: `lint-docs / lint-docs-complete`）を
+  1 件指定すればよい。各 lint ジョブは boolean input で個別に無効化されうるため
+  `skipped` は成功扱い、`failure` / `cancelled` は fail-closed で失敗になる
 
 ## 前提条件
 
