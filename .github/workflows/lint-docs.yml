@@ -633,3 +633,59 @@ jobs:
             --from "${BASE_SHA}" \
             --to "${HEAD_SHA}" \
             --verbose
+
+  # ==========================================================================
+  # 完遂判定用の集約ジョブ。branch protection / ruleset の required status check には
+  # 本ジョブ（呼び出し側から見た名前は `<呼び出し側 job id> / lint-docs-complete`）を
+  # 1 件指定すればよい（4 lint ジョブを個別に必須指定すると input 切替・SHA 更新の
+  # たびに ruleset の追随が要るため、集約側へ寄せる）。rust-base-ci の
+  # rust-base-ci-complete と同型だが、各 lint ジョブは boolean input の `if:` で
+  # 個別に無効化されうるため skipped は成功扱いとする（無効化した lint を required
+  # check が恒久ブロックしないため）。failure / cancelled は fail-closed で落とす。
+  # ==========================================================================
+  lint-docs-complete:
+    name: lint-docs-complete
+    runs-on: ${{ inputs.runner-label }}
+    # needs.*.result の検証のみで GitHub API・リポジトリ内容へ一切アクセスしないため、
+    # 呼び出し側が reviewdog 用に付与した pull-requests: write 等を継承しないよう
+    # 空 permissions で明示的に無効化する（権限最小化）。
+    permissions: {}
+    # 失敗・スキップ時にも必ず実行して fail-closed で判定する
+    # （bare needs では failure 時に本ジョブ自体が skipped になり、required check が
+    # 「pending のまま」という分かりにくい壊れ方をするため）。
+    if: ${{ always() }}
+    needs: [markdownlint, editorconfig, yamllint, commitlint]
+    timeout-minutes: 5
+    steps:
+      - name: 全ジョブ結果の検証（success / skipped のみ許容）
+        env:
+          RESULT_MARKDOWNLINT: ${{ needs.markdownlint.result }}
+          RESULT_EDITORCONFIG: ${{ needs.editorconfig.result }}
+          RESULT_YAMLLINT: ${{ needs.yamllint.result }}
+          RESULT_COMMITLINT: ${{ needs.commitlint.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=1
+          for pair in \
+            "markdownlint:${RESULT_MARKDOWNLINT}" \
+            "editorconfig:${RESULT_EDITORCONFIG}" \
+            "yamllint:${RESULT_YAMLLINT}" \
+            "commitlint:${RESULT_COMMITLINT}"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            case "${result}" in
+              success | skipped)
+                echo "OK: ${name} = ${result}"
+                ;;
+              *)
+                echo "NG: ${name} = ${result}"
+                ok=0
+                ;;
+            esac
+          done
+          if [ "${ok}" -ne 1 ]; then
+            echo "一部ジョブが success / skipped ではありません" >&2
+            exit 1
+          fi
+          echo "全ジョブ success / skipped"
