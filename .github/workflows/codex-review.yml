@@ -80,7 +80,9 @@ on:
         description: >-
           ジョブを失敗させる指摘の priority（カンマ区切り。例 "P0,P1,P2"）。
           既定は P0/P1 のみブロックし、P2/P3 は advisory（コメント投稿のみ）。
-          空文字・P0〜P3 以外の値は fail-closed で拒否する
+          P0/P1 は常に必須集合（gate の弱体化防止のため除外不可）で、調整できるのは
+          P2/P3 を追加するかどうかのみ。P0/P1 を欠く指定・空文字・P0〜P3 以外の値は
+          fail-closed で拒否する
         type: string
         required: false
         default: "P0,P1"
@@ -363,7 +365,9 @@ jobs:
       # （既定 "P0,P1"。例: ドキュメント中心リポジトリで P2 までブロックしたい場合は
       # wrapper から `with: { block-priorities: "P0,P1,P2" }` を渡す）。入力の検証は
       # fail-closed: 空・P0〜P3 以外のトークンが混ざっていた場合は、緩い gate で
-      # 素通りさせず即失敗させる
+      # 素通りさせず即失敗させる。さらに **P0/P1 は常に必須集合**とし、P0/P1 を欠く
+      # 指定（例 "P2" のみ）も拒否する（入力で既存の 2 段 gate を弱体化させない。
+      # 調整できるのは P2/P3 をブロック対象へ追加する方向のみ）
       - name: Gate on blocking findings
         env:
           BLOCK_PRIORITIES: ${{ inputs.block-priorities }}
@@ -378,6 +382,12 @@ jobs:
             for (const p of prios) {
               if (!valid.has(p)) {
                 console.error("block-priorities に不正な値があります: " + p + "（P0〜P3 のカンマ区切りのみ許可）");
+                process.exit(1);
+              }
+            }
+            for (const required of ["P0", "P1"]) {
+              if (!prios.includes(required)) {
+                console.error("block-priorities に " + required + " が含まれていません（P0/P1 は必須集合。gate の弱体化防止のため除外できない）");
                 process.exit(1);
               }
             }

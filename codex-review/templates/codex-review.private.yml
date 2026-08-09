@@ -27,7 +27,7 @@ jobs:
     # self-hosted）が組織 runner 方針に合致するため、runner ラベルの指定は不要。
     # 詳細は docs/runner-policy.md を参照。
     #
-    # ジョブを失敗させる指摘の priority を変えたい場合は block-priorities を渡す
-    # （既定は "P0,P1"。P2/P3 は advisory）:
+    # P2/P3 もブロック対象へ追加したい場合は block-priorities を渡す
+    # （既定は "P0,P1"。P0/P1 は除外不可で、P2/P3 の追加のみ調整できる）:
     # with:
     #   block-priorities: "P0,P1,P2"

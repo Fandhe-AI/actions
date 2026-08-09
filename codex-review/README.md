@@ -140,7 +140,7 @@ PR 自身がレビュー基準を書き換えても当の PR のレビューに�
 | `timeout-minutes` | - | `30` | codex ジョブの timeout（分） |
 | `prompt-path` | - | `.github/codex/prompts/review.md` | 呼び出し側リポジトリの prompt パス（base に無ければ同梱既定版） |
 | `schema-path` | - | `.github/codex/review-schema.json` | 呼び出し側リポジトリの schema パス（base に無ければ同梱既定版） |
-| `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り。例 `P0,P1,P2`）。含まれない priority は advisory（コメント投稿のみ）。空・P0〜P3 以外は fail-closed で拒否 |
+| `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り。例 `P0,P1,P2`）。P0/P1 は必須集合（gate の弱体化防止のため除外不可）で、調整できるのは P2/P3 の追加のみ。含まれない P2/P3 は advisory（コメント投稿のみ）。P0/P1 を欠く指定・空・P0〜P3 以外は fail-closed で拒否 |
 
 ## runner 構築
 
