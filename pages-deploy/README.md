@@ -65,7 +65,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # リポジトリ固有のサイト生成（例: Rust 製 SSG）。dist の実在検証等の
       # sanity check もここで行うとよい

@@ -116,7 +116,7 @@ jobs:
         # GITHUB_TOKEN を使わないため、既定の .git/config への認証情報永続化を無効化し、
         # 共有 self-hosted runner の workspace にトークンを残留させない。
         # submodules は既定（false）のまま: fmt/clippy/test/deny に不要。
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -178,7 +178,7 @@ jobs:
     steps:
       - name: Checkout
         # persist-credentials: false（fmt ジョブと同一方針）。
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -231,7 +231,7 @@ jobs:
     steps:
       - name: Checkout
         # persist-credentials: false（fmt ジョブと同一方針）。
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -283,7 +283,7 @@ jobs:
     steps:
       - name: Checkout
         # persist-credentials: false（fmt ジョブと同一方針）。
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 

@@ -45,7 +45,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@<SHA> # v6
       - uses: Fandhe-AI/actions/skills-update@<SHA> # main
         with:
           token: ${{ secrets.SKILLS_PAT }}
@@ -115,7 +115,7 @@ jobs:
         with:
           app-id: ${{ vars.AUTOMATION_APP_ID }}
           private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@<SHA> # v6
       - uses: Fandhe-AI/actions/skills-update@<SHA> # main
         with:
           token: ${{ steps.app-token.outputs.token }}
