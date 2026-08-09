@@ -32,3 +32,6 @@ jobs:
       # コメント投稿ジョブなので、必ず ubuntu-latest を明示的に渡すこと。
       # 詳細は docs/runner-policy.md「3. 例外: codex-review」を参照。
       post-feedback-runner-label: ubuntu-latest
+      # P2/P3 もブロック対象へ追加したい場合は block-priorities を渡す
+      # （既定は "P0,P1"。P0/P1 は除外不可で、P2/P3 の追加のみ調整できる）:
+      # block-priorities: "P0,P1,P2"
