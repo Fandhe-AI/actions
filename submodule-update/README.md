@@ -41,7 +41,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@<SHA> # v6
         with:
           submodules: recursive
           token: ${{ secrets.SUBMODULE_PAT }}
@@ -110,7 +110,7 @@ jobs:
         with:
           app-id: ${{ vars.AUTOMATION_APP_ID }}
           private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@<SHA> # v6
         with:
           submodules: recursive
           token: ${{ steps.app-token.outputs.token }}
