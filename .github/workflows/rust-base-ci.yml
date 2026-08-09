@@ -399,7 +399,13 @@ jobs:
           echo "cargo-deny@${VERSION} をインストールします（現在: ${installed:-未導入}）"
           # 明示的に stable を導入してから使う（rustup の自動インストール挙動に依存しない）。
           rustup toolchain install stable --profile minimal
-          RUSTUP_TOOLCHAIN=stable cargo install --locked "cargo-deny@${VERSION}"
+          # --force: cargo のインストール記録（.crates2.json）に期待バージョンが登録済みなのに
+          # PATH 上の cargo-deny が別バージョンを返す状態不整合の runner では、--force なしだと
+          # `Ignored package ... is already installed` でバイナリが更新されず、後段の厳密一致
+          # 検証に恒久的に落ち続ける（self-hosted runner で実測）。このパスへ入るのは
+          # バージョン不一致時のみなので、一致時の冪等スキップ（上の early return）は
+          # 従来どおり維持される。
+          RUSTUP_TOOLCHAIN=stable cargo install --locked --force "cargo-deny@${VERSION}"
 
           # インストール後の厳密一致検証（fail-closed）。
           installed="$(get_installed_version)"
