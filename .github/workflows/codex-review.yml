@@ -369,9 +369,11 @@ jobs:
       # 指定（例 "P2" のみ）も拒否する（入力で既存の 2 段 gate を弱体化させない。
       # 調整できるのは P2/P3 をブロック対象へ追加する方向のみ）
       - name: Gate on blocking findings
+        shell: bash
         env:
           BLOCK_PRIORITIES: ${{ inputs.block-priorities }}
         run: |
+          set -euo pipefail
           count="$(node -e '
             const valid = new Set(["P0", "P1", "P2", "P3"]);
             const prios = (process.env.BLOCK_PRIORITIES ?? "").split(",").map(s => s.trim()).filter(s => s !== "");
