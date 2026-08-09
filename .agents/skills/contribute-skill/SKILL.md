@@ -88,19 +88,34 @@ SOURCE=$(jq -r ".skills[\"${SKILL_NAME}\"].source" skills-lock.json)
 SOURCE_TYPE=$(jq -r ".skills[\"${SKILL_NAME}\"].sourceType" skills-lock.json)
 
 # 安全弁: Fandhe-AI org 以外への push を拒否する
-# 短縮形 (Fandhe-AI/<repo>) と URL 形式 (https://github.com/Fandhe-AI/<repo>) の両方を許可する
+# 1) まず正規化する（URL 形式は OWNER/REPO へ変換、短縮形はそのまま採用）
 case "${SOURCE}" in
-  Fandhe-AI/*)
-    # 短縮形: そのまま使用
-    REPO_SLUG="${SOURCE}"
-    ;;
-  https://github.com/Fandhe-AI/*)
-    # URL 形式: OWNER/REPO 形式に正規化し末尾 .git を除去する
+  https://github.com/*)
     REPO_SLUG="${SOURCE#https://github.com/}"
-    REPO_SLUG="${REPO_SLUG%.git}"
     ;;
   *)
-    echo "エラー: source '${SOURCE}' は Fandhe-AI org のリポジトリではありません。中止します。"
+    REPO_SLUG="${SOURCE}"
+    ;;
+esac
+# 末尾 .git の除去は両形式共通で行う
+# （URL 分岐内のみで除去すると短縮形 'Fandhe-AI/<repo>.git' が .git 付きのまま
+#   後段の正規表現を通過してしまうため、検証の前に必ずここで正規化する）
+REPO_SLUG="${REPO_SLUG%.git}"
+
+# 2) 正規化後の値を厳密検証する: owner は Fandhe-AI 固定、repo は単一セグメントのみ許可する
+#    [A-Za-z0-9._-]+ は '/'・'?'・'#'・空文字を含められないため、
+#    パストラバーサル（../）・余剰パスセグメント・クエリ・フラグメントをすべて拒否できる
+#    （前方一致 case では `Fandhe-AI/../../attacker/repo` のような値が誤って通過していた）
+if [[ ! "${REPO_SLUG}" =~ ^Fandhe-AI/[A-Za-z0-9._-]+$ ]]; then
+  echo "エラー: source '${SOURCE}' は Fandhe-AI/<repo> 形式ではありません。中止します。"
+  exit 1
+fi
+
+# 3) '.'・'..' は上記正規表現を通過してしまうため repo 名として明示拒否する
+#    （例: 'Fandhe-AI/..git' は .git 除去後に 'Fandhe-AI/.' へ化ける）
+case "${REPO_SLUG#Fandhe-AI/}" in
+  .|..)
+    echo "エラー: source '${SOURCE}' の repository 名が不正です。中止します。"
     exit 1
     ;;
 esac
@@ -112,7 +127,7 @@ if [[ "${SOURCE_TYPE}" != "github" ]]; then
 fi
 ```
 
-- `source` が `Fandhe-AI/`（短縮形）または `https://github.com/Fandhe-AI/`（URL 形式）のいずれでも始まらない場合は **エラーで中止** します（安全弁：見知らぬリポジトリへ意図せず push しないため）。
+- `source` は正規化後の `OWNER/REPO` が `^Fandhe-AI/[A-Za-z0-9._-]+$` に完全一致する場合のみ許可します（安全弁：見知らぬリポジトリへ意図せず push しないため）。`../` を含むパストラバーサル・クエリ（`?x=1`）・フラグメント（`#frag`）・余剰パスセグメント（`/extra`）を含む値は正規表現に一致せずエラーで中止します。検証は必ず `.git` 除去などの正規化の**後**に行います（正規化前に検証すると `Fandhe-AI/..git` のような値が正規化後に別の値へ化けてすり抜けるため）。
 - `sourceType` が `github` 以外の場合も **エラーで中止** します（GitHub 以外の source は本スキルの想定外であり、`gh repo clone` / `gh pr create` が正常動作しないため）。
 - 正規化後の `REPO_SLUG` は以降の Step で `gh repo clone`・`gh pr create --repo` に利用します。
 
@@ -120,7 +135,14 @@ fi
 
 ```bash
 git log --oneline -- "${LOCAL_SKILL_DIR}/"
-git diff HEAD~1 HEAD -- "${LOCAL_SKILL_DIR}/"
+# HEAD~1 の有無を明示的に判定する（git diff は差分ありでも終了コード 0 のため || で分岐しない）
+if git rev-parse --verify -q HEAD~1 >/dev/null; then
+  git diff HEAD~1 HEAD -- "${LOCAL_SKILL_DIR}/"
+else
+  # 親コミットがない場合（初回コミット・shallow clone 等）は空ツリーと HEAD を比較する
+  # （作業ツリー差分ではコミット済み・クリーンな状態で空になるため使わない）
+  git diff "$(git hash-object -t tree /dev/null)" HEAD -- "${LOCAL_SKILL_DIR}/"
+fi
 ```
 
 ユーザーに「この改修内容で upstream に PR を作ってよいか」を確認します。
@@ -142,16 +164,14 @@ git diff HEAD~1 HEAD -- "${LOCAL_SKILL_DIR}/"
 ```bash
 UID_VAL=$(id -u)
 TS=$(date +%Y%m%d-%H%M%S)
-WORKDIR="/tmp/claude-${UID_VAL}/contribute-${SKILL_NAME}-${TS}"
+# $TMPDIR が設定されていればそちらを優先する（サンドボックス互換: /tmp が書き込み不可の環境がある）
+WORKDIR="${TMPDIR:-/tmp/claude-${UID_VAL}}/contribute-${SKILL_NAME}-${TS}"
 mkdir -p "$WORKDIR"
 ```
-
-`$TMPDIR` が設定されていればそちらを優先します（サンドボックス互換）。
 
 ### Step 6: upstream を clone する
 
 ```bash
-# sandbox 環境では各コマンドに GIT_SSL_NO_VERIFY=1 を前置する（詳細: docs/sandbox-tls.md）
 # cd する前にローカルリポジトリのルートを捕捉する（cd - は stdout を汚染するため使用しない）
 ORIG_DIR="$(pwd)"
 gh repo clone "${REPO_SLUG}" "$WORKDIR/upstream"
@@ -181,25 +201,35 @@ elif [[ -d ".agents/skills/${SKILL_NAME}" ]]; then
 elif [[ -d "skills" ]]; then
   # upstream が skills/ 配下で公開している慣習
   UPSTREAM_SKILL_PATH="skills/${SKILL_NAME}"
-  mkdir -p "${WORKDIR}/upstream/${UPSTREAM_SKILL_PATH}"
 elif [[ -d ".agents/skills" ]]; then
   # upstream が .agents/skills/ 配下で公開している慣習
   UPSTREAM_SKILL_PATH=".agents/skills/${SKILL_NAME}"
-  mkdir -p "${WORKDIR}/upstream/${UPSTREAM_SKILL_PATH}"
 else
   echo "警告: upstream にスキルルートが見つかりません。skills/ を既定として新規追加します。"
   UPSTREAM_SKILL_PATH="skills/${SKILL_NAME}"
-  mkdir -p "${WORKDIR}/upstream/${UPSTREAM_SKILL_PATH}"
 fi
 ```
 
-`UPSTREAM_SKILL_PATH` が確定したらコピーを実行します。
+`UPSTREAM_SKILL_PATH` が確定したらコピーを実行します。`cp -R` は追加・上書きのみで削除を伝搬しないため、ローカルで削除したファイルが upstream 側に残存してしまいます。これを避けるため、宛先ディレクトリを一度消してから作り直し、コピーし直す（delete-then-copy）方式を取ります。
 
 ```bash
+# 削除伝搬のための同期: cp -R は削除を反映しないため、宛先を消してからコピーする
+# 安全弁: 削除対象が clone 内の想定スキルパス（2 形態のみ）であることを検証してから rm する
+case "${UPSTREAM_SKILL_PATH}" in
+  "skills/${SKILL_NAME}"|".agents/skills/${SKILL_NAME}") ;;
+  *)
+    echo "エラー: 想定外の UPSTREAM_SKILL_PATH です: ${UPSTREAM_SKILL_PATH}"
+    exit 1
+    ;;
+esac
+rm -rf "${WORKDIR}/upstream/${UPSTREAM_SKILL_PATH}"
+mkdir -p "${WORKDIR}/upstream/${UPSTREAM_SKILL_PATH}"
 # LOCAL_SKILL_DIR は Step 1 で解決済み（skills/<name>/ または .agents/skills/<name>/）
 # ORIG_DIR は Step 6 で cd する前に捕捉済み（cd - は stdout 汚染のため使用しない）
 cp -R "${ORIG_DIR}/${LOCAL_SKILL_DIR}/." "${WORKDIR}/upstream/${UPSTREAM_SKILL_PATH}/"
 ```
+
+削除対象は必ず `${WORKDIR}/upstream/` 配下（clone 用の一時ディレクトリ）に閉じ、`UPSTREAM_SKILL_PATH` が `skills/<name>` か `.agents/skills/<name>` の 2 形態以外なら `rm -rf` の前に中止します。新規スキル追加（宛先未存在）の場合も `rm -rf` は無害に成功し、直後の `mkdir -p` で作成されます。
 
 ### Step 8: 差分を確認する
 
@@ -215,8 +245,8 @@ git diff
 
 ```bash
 SLUG=$(date +%Y%m%d-%H%M%S)
-git switch -c "contribute/<SKILL_NAME>-${SLUG}"
-git add <変更パス>
+git switch -c "contribute/${SKILL_NAME}-${SLUG}"
+git add "${UPSTREAM_SKILL_PATH}/"
 git commit -m "$(cat <<'EOF'
 <type>(<scope>): <subject>
 
@@ -226,6 +256,7 @@ EOF
 )"
 ```
 
+- `git add "${UPSTREAM_SKILL_PATH}/"` はパス指定 add のため、Step 7 の delete-then-copy で消えたファイルの削除（`D`）も含めて stage されます
 - Conventional Commits 形式
 - `--no-verify` は使用しない（pre-commit フックを通す）
 - co-author は付けない（ローカル規約に合わせる）
@@ -233,8 +264,13 @@ EOF
 ### Step 10: push と PR 作成
 
 ```bash
-# sandbox 環境では各コマンドに GIT_SSL_NO_VERIFY=1 を前置する（詳細: docs/sandbox-tls.md）
-git push -u origin "contribute/<SKILL_NAME>-${SLUG}"
+git push -u origin "contribute/${SKILL_NAME}-${SLUG}"
+
+# 貢献元リポジトリの OWNER/REPO を取得する（PR body の Source 節に使用。
+# 本スキルは任意のリポジトリから実行されるため、特定リポジトリ名を固定しない）
+SRC_REPO=$(git -C "${ORIG_DIR}" remote get-url origin 2>/dev/null \
+  | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')
+[[ -n "${SRC_REPO}" ]] || SRC_REPO=$(basename "${ORIG_DIR}")
 
 gh pr create \
   --repo "${REPO_SLUG}" \
@@ -247,7 +283,7 @@ gh pr create \
 
 ## Source
 
-ローカルの [ideas リポジトリ](../../) 側で改修後、`/contribute-skill <SKILL_NAME>` により投稿。
+ローカルの <SRC_REPO> 側で改修後、`/contribute-skill <SKILL_NAME>` により投稿。
 
 ## Test plan
 
@@ -261,6 +297,8 @@ EOF
 
 `--repo` には Step 2 で正規化した `${REPO_SLUG}`（`OWNER/REPO` 形式）を渡します。URL 形式から `OWNER/REPO` への変換は Step 2 の case 文で完了しています。
 
+body の `<SRC_REPO>` は上で取得した貢献元リポジトリの `OWNER/REPO`（origin 未設定時はディレクトリ名）に置き換えます（heredoc はクォート済みのため Claude が実値で埋める。特定リポジトリ名のハードコード禁止）。
+
 Draft PR を作成する場合は `--draft` を付けます（デフォルトはユーザー確認の上で決定）。
 
 ### Step 11: PR URL を返す & 後処理案内
@@ -273,17 +311,32 @@ Draft PR を作成する場合は `--draft` を付けます（デフォルトは
 
 - **SKILL_NAME は kebab-case のみ許可**：`..` のような値によるパストラバーサルを防ぐため、空判定の直後・パス解決の前に `^[a-z][a-z0-9-]+$` で検証する（security.md A03/A01）
 - **`skills/` と `.agents/skills/` の両方が存在する場合は中止**：silently に `skills/` を優先せず、環境変数 `LOCAL_SKILL_DIR` に改修対象パスを指定して再実行を求める。`LOCAL_SKILL_DIR` は `skills/<name>` か `.agents/skills/<name>` の2パスのみ受理し、任意パス指定によるパストラバーサルを防ぐ
-- **source が Fandhe-AI org 以外の場合は中止**：`Fandhe-AI/`（短縮形）と `https://github.com/Fandhe-AI/`（URL 形式）のみを許可し、それ以外は意図しない外部リポジトリへの push を防ぐため中止する
+- **source が Fandhe-AI org 以外の場合は中止**：前方一致（`Fandhe-AI/*` 等）ではなく、正規化（`.git` 除去等）後の `OWNER/REPO` が `^Fandhe-AI/[A-Za-z0-9._-]+$` に完全一致するかで判定する。`../` によるパストラバーサル・クエリ・フラグメント・余剰パスセグメントを含む値、および repo 名が `.`／`..` になる値は中止し、意図しない外部リポジトリへの push を防ぐ
 - **セキュリティ問題が見つかった場合は中止**：修正後に再実行
-- **sandbox 環境での `GIT_SSL_NO_VERIFY=1` 併用**：詳細は後述の「sandbox 環境での実行」節を参照
 - **upstream の配置はクローンしたリポジトリのレイアウトで判定する**：`skills-lock.json` の `skillPath` はローカル install パス（例: `.agents/skills/github-docs/SKILL.md`）であり、upstream リポジトリ内の配置ではない。`skillPath` の dirname を `UPSTREAM_SKILL_PATH` に採用してはならない。判定順は `skills/<name>` の存在 → `.agents/skills/<name>` の存在 → スキルルート親ディレクトリ（`skills/` or `.agents/skills/`）の慣習 → 最終デフォルト `skills/`（より一般的な公開レイアウト）
+- **宛先は消してからコピーする（削除伝搬）**：`cp -R` は追加・上書きのみで削除を反映しないため、ローカルで削除したファイルが upstream 側に残存してしまう。`rm -rf` 前に `UPSTREAM_SKILL_PATH` が `skills/<name>` か `.agents/skills/<name>` のいずれかであることを case 文で検証し、それ以外の値なら中止する。削除対象は必ず clone 用の一時ディレクトリ（`${WORKDIR}/upstream/`）配下のみに閉じ、それ以外のファイルには一切触れない
 - **既に同名の branch がある場合**：秒単位スラッグで通常は衝突しないが、万一の場合はユーザーに確認
 
 ## sandbox 環境での実行
 
-sandbox で本スキルを実行する場合、ネットワーク越しの GitHub 操作には `GIT_SSL_NO_VERIFY=1` の併用を検討してください。本スキルの主なリモート操作は `gh repo clone` / `git push` / `gh pr create` で、「リモート書き込み」判定は **要** です。コマンド分類の詳細と TLS 検証無効化の注意事項は [`docs/sandbox-tls.md`](../../docs/sandbox-tls.md) を参照してください。
+このスキルは sandbox 環境では実行できない。ネットワークアクセス・ファイルシステムへの書き込みが必要なため、通常の Claude Code セッションで実行すること。
+
+## 検証
+
+PR 作成後、以下で完了を確認する。
+
+```bash
+# PR が作成されたことを確認
+gh pr view --repo "${REPO_SLUG}" --web
+
+# または URL を直接確認（Step 11 で出力済み）
+```
+
+- PR URL が返されること
+- PR のタイトル・差分が意図した内容であること
+- `sync-skills-lock` 実行案内が出力されていること
 
 ## 既存スキルとの関係
 
 - Step 4 のセキュリティチェック、Step 9 の Conventional Commits、Step 10 の PR body は `create-pr/SKILL.md` の流儀を踏襲
-- マージ後は `/sync-skills-lock` で `skills-lock.json` の `computedHash` を更新
+- マージ後は `sync-skills-lock` で `skills-lock.json` の `computedHash` を更新
