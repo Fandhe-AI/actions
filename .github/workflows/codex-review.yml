@@ -33,8 +33,9 @@ name: Codex PR review (reusable)
 #   フォールバックせず fail-closed で拒否する（「欠落」と「不正」を区別する）
 # - 指摘は --output-schema で構造化 JSON に固定し、gate は 2 段で判定する:
 #   (1) `review_completed == true` の確認（fail-closed。runner の sandbox 制約等でレビュー
-#   手順自体を完遂できなかった場合に findings 空の正常系 JSON が返り P0/P1 gate だけが
-#   素通りする fail-open を防ぐ）→ (2) P0/P1 指摘が 1 件でもあればジョブ失敗
+#   手順自体を完遂できなかった場合に findings 空の正常系 JSON が返り priority gate だけが
+#   素通りする fail-open を防ぐ）→ (2) ブロック対象 priority（`block-priorities` 入力で
+#   リポジトリごとに調整可能。既定 P0/P1）の指摘が 1 件でもあればジョブ失敗
 # - コメント投稿は 2 ジョブ分離パターン（codex ジョブは contents: read のみで資格情報を扱い、
 #   書き込み権限（pull-requests: write）を持つジョブには渡さない）
 # - concurrency は reusable workflow のトップレベルでは機能しないため、呼び出し側 wrapper で
@@ -75,6 +76,14 @@ on:
         type: string
         required: false
         default: .github/codex/review-schema.json
+      block-priorities:
+        description: >-
+          ジョブを失敗させる指摘の priority（カンマ区切り。例 "P0,P1,P2"）。
+          既定は P0/P1 のみブロックし、P2/P3 は advisory（コメント投稿のみ）。
+          空文字・P0〜P3 以外の値は fail-closed で拒否する
+        type: string
+        required: false
+        default: "P0,P1"
 
 permissions:
   contents: read
@@ -350,14 +359,36 @@ jobs:
           fi
           echo "review_completed: true（gate 通過）"
 
-      - name: Gate on P0/P1 findings
+      # ブロック対象の priority は `block-priorities` 入力でリポジトリごとに調整できる
+      # （既定 "P0,P1"。例: ドキュメント中心リポジトリで P2 までブロックしたい場合は
+      # wrapper から `with: { block-priorities: "P0,P1,P2" }` を渡す）。入力の検証は
+      # fail-closed: 空・P0〜P3 以外のトークンが混ざっていた場合は、緩い gate で
+      # 素通りさせず即失敗させる
+      - name: Gate on blocking findings
+        env:
+          BLOCK_PRIORITIES: ${{ inputs.block-priorities }}
         run: |
-          count="$(node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((r.findings ?? []).filter(f => f && (f.priority === "P0" || f.priority === "P1")).length))' "$RUNNER_TEMP/codex-review.json")"
+          count="$(node -e '
+            const valid = new Set(["P0", "P1", "P2", "P3"]);
+            const prios = (process.env.BLOCK_PRIORITIES ?? "").split(",").map(s => s.trim()).filter(s => s !== "");
+            if (prios.length === 0) {
+              console.error("block-priorities が空です（fail-closed で拒否）");
+              process.exit(1);
+            }
+            for (const p of prios) {
+              if (!valid.has(p)) {
+                console.error("block-priorities に不正な値があります: " + p + "（P0〜P3 のカンマ区切りのみ許可）");
+                process.exit(1);
+              }
+            }
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            process.stdout.write(String((r.findings ?? []).filter(f => f && prios.includes(f.priority)).length));
+          ' "$RUNNER_TEMP/codex-review.json")"
           if [ "${count}" -gt 0 ]; then
-            echo "::error::Codex レビューで P0/P1 指摘が ${count} 件検出されました（詳細は PR コメント参照）"
+            echo "::error::Codex レビューでブロック対象（${BLOCK_PRIORITIES}）の指摘が ${count} 件検出されました（詳細は PR コメント参照）"
             exit 1
           fi
-          echo "P0/P1 指摘なし（gate 通過）"
+          echo "ブロック対象（${BLOCK_PRIORITIES}）の指摘なし（gate 通過）"
 
   # gate 失敗時（needs.codex.result == 'failure'）でもレビュー結果コメントは投稿する
   post_feedback:

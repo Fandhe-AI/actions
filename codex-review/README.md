@@ -1,12 +1,13 @@
 # codex-review
 
 OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の差分を Codex がレビューし、
-優先度付きの指摘（P0〜P3）を PR コメントへ投稿、P0/P1 検出時は CI ジョブを失敗させる。
+優先度付きの指摘（P0〜P3）を PR コメントへ投稿、ブロック対象 priority（`block-priorities`
+入力でリポジトリごとに調整可能。既定 P0/P1）の検出時は CI ジョブを失敗させる。
 
 - 認証は **codex-home 方式**: OpenAI API キーは使わず、self-hosted runner 上に用意した
   ChatGPT ログイン済みの `CODEX_HOME` ディレクトリを参照する（ChatGPT プランのレート枠で動作）
 - 出力は JSON スキーマで構造化し、**2 段の fail-closed gate**（レビュー完遂判定
-  `review_completed` → P0/P1 判定）で判定する
+  `review_completed` → ブロック対象 priority 判定）で判定する
 - レビュー基準・プロンプトはリポジトリごとにカスタマイズ可能。無ければ同梱既定版で動く
 - プロンプトインジェクション・symlink 脱出・資格情報漏洩への多層防御を内蔵する
   （設計根拠は `.github/workflows/codex-review.yml` のコメントを参照）
@@ -139,6 +140,7 @@ PR 自身がレビュー基準を書き換えても当の PR のレビューに�
 | `timeout-minutes` | - | `30` | codex ジョブの timeout（分） |
 | `prompt-path` | - | `.github/codex/prompts/review.md` | 呼び出し側リポジトリの prompt パス（base に無ければ同梱既定版） |
 | `schema-path` | - | `.github/codex/review-schema.json` | 呼び出し側リポジトリの schema パス（base に無ければ同梱既定版） |
+| `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り。例 `P0,P1,P2`）。含まれない priority は advisory（コメント投稿のみ）。空・P0〜P3 以外は fail-closed で拒否 |
 
 ## runner 構築
 
@@ -219,7 +221,8 @@ SHA 更新で workflow 本体と既定制御ファイルが常に一緒に切り
   PR 頻度に注意する
 - refresh token が失効するとレビューが失敗する。その場合はホスト側で
   `codex login --device-auth` を再実行する
-- gate（P0/P1 でジョブ失敗）を required status check にするかは呼び出し側の branch
+- gate（ブロック対象 priority でジョブ失敗。既定 P0/P1、`block-priorities` で調整）を
+  required status check にするかは呼び出し側の branch
   protection 設定次第。`CODEX_HOME_DIR` 未設定時はジョブが skip されるため、required 化
   する場合は skip との両立（skip を成功扱いにするか等）を呼び出し側で設計すること
 - レビューはセキュリティ境界ではない。最終判断は人間レビューが担う
