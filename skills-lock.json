@@ -5,7 +5,7 @@
       "source": "Fandhe-AI/agent-cli-skills",
       "sourceType": "github",
       "skillPath": "skills/contribute-skill/SKILL.md",
-      "computedHash": "ea75e21e7dc9732d3fa3ea3402eb921964ac983150805831c2e544a90331bf02"
+      "computedHash": "0bfcefea336372d160566e15c0b3db122692457ce8175926dbe51b5d42c76ffb"
     },
     "create-commit": {
       "source": "Fandhe-AI/agent-cli-skills",
