@@ -302,26 +302,59 @@ jobs:
       # `--config project_doc_max_bytes=0`: cwd（checkout ルート）配下の AGENTS.md を
       # CLI が起動時に自動でコンテキストへ注入する既定動作を無効化する（Extract
       # ステップのコメント (4) 参照。working tree 正規化との多重防御）
+      # 上流バックエンドの一時エラー（"Selected model is at capacity" / stream 断 /
+      # 429・5xx）は codex exec が非 0 終了で表面化する。これらはリトライで回復する
+      # 見込みが高いため、失敗ログが一時エラーパターンに一致した場合に限り
+      # 最大 3 回まで再実行する（backoff: 60s/120s）。レビュー指摘による gate 失敗や
+      # 認証・設定エラー等の恒久エラーはパターン不一致で即失敗のまま（fail-closed 維持）。
+      # なお "Stream error: ..." は恒久エラー（例: "exceeded retry limit, last
+      # status: 401 Unauthorized" / "unexpected status 404 Not Found"）の接頭辞にも
+      # なるため、一時エラーパターンの一致だけでは判定せず、恒久エラーパターン
+      # （非 429 の 4xx ステータス）への一致を除外条件に重ねる（Cursor Bugbot
+      # 指摘への対処）。恒久判定は HTTP ステータスコード文脈（"status ... 4xx" /
+      # "4xx Unauthorized" 等のコード+理由句ペア）にアンカーする。裸の
+      # "not found" 等の語句だけでは判定しない（DNS の "Name or service not
+      # found" のような一時エラーを恒久扱いしないため。同 Bugbot 第2指摘への対処）。
+      # パターン判定はマスク前の生ログに対して行うが、ログの公開（echo）は従来どおり
+      # マスク後のみ
       - name: Run Codex review
         env:
           CODEX_HOME: ${{ vars.CODEX_HOME_DIR }}
         run: |
-          status=0
-          codex exec \
-            --sandbox read-only \
-            --config project_doc_max_bytes=0 \
-            --output-schema "$RUNNER_TEMP/review-schema.json" \
-            --output-last-message "$RUNNER_TEMP/codex-review.json" \
-            - < "$RUNNER_TEMP/review.md" \
-            > "$RUNNER_TEMP/codex-exec.log" 2>&1 || status=$?
-          sed -E \
-            -e 's/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}(\.[A-Za-z0-9_-]+)?/[REDACTED_JWT]/g' \
-            -e 's/(^|[^A-Za-z0-9_])rt[._][A-Za-z0-9._~-]{20,}/\1[REDACTED_REFRESH_TOKEN]/g' \
-            -e 's/sk-[A-Za-z0-9_-]{20,}/[REDACTED_KEY]/g' \
-            -e 's/ghp_[A-Za-z0-9]{20,}/[REDACTED_TOKEN]/g' \
-            -e 's/github_pat_[A-Za-z0-9_]{20,}/[REDACTED_TOKEN]/g' \
-            "$RUNNER_TEMP/codex-exec.log"
-          exit "$status"
+          transient_pattern='Selected model is at capacity|[Ss]tream (disconnected|error)|error sending request|[Tt]oo [Mm]any [Rr]equests|status.? (429|5[0-9]{2})|unexpected status 5[0-9]{2}'
+          permanent_pattern='status.? 4(0[0-9]|1[0-9]|2[0-8]|[3-9][0-9])([^0-9]|$)|(^|[^0-9])4(0[0-9]|1[0-9]|2[0-8]|[3-9][0-9]) ([Uu]nauthorized|[Ff]orbidden|[Nn]ot [Ff]ound|[Bb]ad [Rr]equest)'
+          max_attempts=3
+          attempt=1
+          while :; do
+            status=0
+            rm -f "$RUNNER_TEMP/codex-review.json"
+            codex exec \
+              --sandbox read-only \
+              --config project_doc_max_bytes=0 \
+              --output-schema "$RUNNER_TEMP/review-schema.json" \
+              --output-last-message "$RUNNER_TEMP/codex-review.json" \
+              - < "$RUNNER_TEMP/review.md" \
+              > "$RUNNER_TEMP/codex-exec.log" 2>&1 || status=$?
+            sed -E \
+              -e 's/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}(\.[A-Za-z0-9_-]+)?/[REDACTED_JWT]/g' \
+              -e 's/(^|[^A-Za-z0-9_])rt[._][A-Za-z0-9._~-]{20,}/\1[REDACTED_REFRESH_TOKEN]/g' \
+              -e 's/sk-[A-Za-z0-9_-]{20,}/[REDACTED_KEY]/g' \
+              -e 's/ghp_[A-Za-z0-9]{20,}/[REDACTED_TOKEN]/g' \
+              -e 's/github_pat_[A-Za-z0-9_]{20,}/[REDACTED_TOKEN]/g' \
+              "$RUNNER_TEMP/codex-exec.log"
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ] \
+              || ! grep -qE "$transient_pattern" "$RUNNER_TEMP/codex-exec.log" \
+              || grep -qE "$permanent_pattern" "$RUNNER_TEMP/codex-exec.log"; then
+              exit "$status"
+            fi
+            wait_seconds=$((attempt * 60))
+            echo "::warning::codex exec が上流の一時エラーで失敗しました（attempt ${attempt}/${max_attempts}）。${wait_seconds}s 待機して再実行します"
+            sleep "$wait_seconds"
+            attempt=$((attempt + 1))
+          done
 
       # 出力を公開（PR コメント投稿・ジョブ出力化）する前の資格情報混入検査。
       # read-only sandbox は読み取りを妨げないため、プロンプトインジェクション等で
