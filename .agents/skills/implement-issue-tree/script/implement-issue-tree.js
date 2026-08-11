@@ -4978,12 +4978,23 @@ const running = new Map()
 // fix / impl の worktree は状態ファイルで追跡・削除されるため残置に数えない。
 // 本ランで新規着手し、まだ完了していないイシュー番号の集合。dispatch の予約計上に使う。
 const newStartActive = new Set()
-// 本ランで monitoring 再開し、まだ完了していないイシュー番号の集合。monitoring 再開は
-// review / pr-create を積み増さないが、Merge ループの fix が routingError 終端する際に
-// fix-routing-error を最大 1 件記録し得る（PR #184 以降）ため、
-// EPHEMERAL_RESERVE_PER_MONITORING_RESUME 分を予約計上する（再開自体は抑止しない —
-// 予約は新規着手側の投入判定を保守的にするだけで、monitoring 再開の実行を止めない）。
+// 本ランで monitoring 再開し、まだ完了していない implement イシュー番号の集合（kind: 'implement'
+// の再開のみ載せる。verify-close の再開は worktree を作らず予約 0 のため載せない——載せると
+// reservedTotal 計算に幽霊予約が乗る。Cursor Bugbot Low 対応 / PR #185 Bugbot Medium と同じ線引き。
+// PR #200 参照）。monitoring 再開は review / pr-create を積み増さないが、Merge ループの fix が
+// routingError 終端する際に fix-routing-error を最大 1 件記録し得る（PR #184 以降）ため、
+// EPHEMERAL_RESERVE_PER_MONITORING_RESUME 分を予約計上する。この予約は新規着手側
+// （implement 候補）の投入判定を保守的にするだけでなく、monitoring 再開自身の開始判定にも
+// 使う（pet-hub PR #1062 codex-review P1 対応。以前は monitoring 再開自身の開始を抑止せず、
+// 上限を無視して残置数を際限なく増やせた）。
 const monitoringResumeActive = new Set()
+// 残置 worktree 上限ゲートにより monitoring 再開を defer したイシューの記録（n → 手動介入を
+// 促す理由文字列）。ラン終了時の interrupted レポート（isActiveMonitoring のまま残る集合）は
+// 既定で「同じ引数で再実行すると monitor から再開する」と案内するが、上限超過が理由で defer
+// した場合はこの文言のままだと誤り（上限を手動解消しない限り再実行しても同じ理由で defer が
+// 繰り返される）。レポートと実態の矛盾を避けるため個別に理由を上書きする
+// （PR #124 Bugbot Medium と同種の不整合防止。pet-hub PR #1062 codex-review P1 対応）。
+const monitoringResumeGateDeferred = new Map()
 while (true) {
   // 空きスロットへ post-order 順に投入する（halted 後は新規着手しない）
   if (!halted) {
@@ -5009,14 +5020,102 @@ while (true) {
       // failedSet は確認しないため、依存未充足のまま再開すると依存順のマージ契約が破れる
       // （codex-review P1 対応）。依存が pending の間はこの while ループが次周回で再評価する。
       if (isActiveMonitoring(n)) {
+        // 残置 worktree 上限ゲートを monitoring 再開にも適用する（pet-hub PR #1062
+        // codex-review P1 対応）。monitoring 再開は review / pr-create を積み増さないが、
+        // Merge ループの fix が routingError 終端する際に fix-routing-error worktree を
+        // 最大 1 件（EPHEMERAL_RESERVE_PER_MONITORING_RESUME）新規作成し得る。修正前は
+        // この積み増しを下の implement 判定 (b) の reservedTotal 計上にのみ使い、
+        // monitoring 再開自身の開始は無条件で許可していたため、キュー内の monitoring 項目を
+        // 順次すべて再開すると上限を無視して残置数を際限なく増やせた（PR #185 が定義した
+        // fail-closed 契約に反する）。下の implement 判定 (b) と同じ「実測＋記録済み積み増し＋
+        // 実行中タスクの残余予約＋自分自身の最大増分」の projected 判定を再開前にも適用し、
+        // 超過が見込まれる場合はこの周回の再開を defer する（恒久停止はしない — 予約は
+        // 実行中タスクの完了で解放されるため、次周回・次回実行で再評価すれば足りる。
+        // running.size === 0 のままこの周回で他に着手できるタスクがなければ while ループは
+        // break し、当該イシューは isActiveMonitoring により「中断（再開可能）」として
+        // 報告される＝データロストなし。ただし通常の「同じ引数で再実行すると再開する」文言は
+        // 上限未解消のままでは defer を繰り返すだけで誤りのため、monitoringResumeGateDeferred へ
+        // 手動介入込みの理由を記録し、ラン終了時の interrupted レポートで上書きする）。
+        //
+        // kind スコープについて: 下の implement 判定 (b) と同じく item.kind === 'implement' に
+        // 限定する。verify-close は isolation: 'worktree' を使わず worktree を一切作らないため
+        // 予約 0 であり、増分 0 の再開候補にまで最大増分 EPHEMERAL_RESERVE_PER_MONITORING_RESUME
+        // を課すと上限付近で親クローズが誤って defer される（PR #185 Bugbot Medium と同じ線引き）。
+        // isActiveMonitoring は savedItems（issue 番号キー）の status/pr のみを見るが、kind は
+        // 今回ツリー形状から再計算されるため、以前 leaf（implement）で monitoring/blocked のまま
+        // 子イシューが増えて次回ランで verify-close ノードへ変わる item は isActiveMonitoring を
+        // 満たしたまま kind: 'verify-close' で到達し得る（runVerifyClose は Merge ループへ入らず
+        // fix-routing-error を積み増さないため、この場合は正しく予約 0 として扱う必要がある）。
+        //
+        // 観測失敗時（residualObserved === false）の扱い（fix-routing-error worktree 新規作成
+        // ideas #230 codex-review P1 対応）: newStartSuppressed は観測失敗時に「新規 worktree を
+        // 作り得る」着手全般を fail-closed で止める設計だが、この kind: 'implement' の monitoring
+        // 再開判定も Merge ループの fix-routing-error worktree を最大 1 件新規作成し得る点は同じ
+        // リスクを持つ（上のコメント参照）。以前は「monitoring 再開は既存 PR の継続だから止めない」
+        // という理由で観測失敗時にこのゲート自体を素通りさせ無条件許可していたが、これは
+        // worktree を新規作成しない一般の monitoring 継続と、fix-routing-error で worktree を
+        // 増やし得るこの kind: 'implement' 経路とを区別できておらず、観測不能な状況でも残置を
+        // 積み増せてしまう fail-open だった。observed が false の間は projected 判定ができないため、
+        // newStartSuppressed と同じ fail-closed 方針に揃え、この周回の再開を defer する
+        // （恒久停止はしない — 次ラン開始時の再観測が成功すれば通常どおり判定できる）。
+        if (item.kind === 'implement' && maxResidualWorktrees > 0 && !residualObserved) {
+          const deferReason =
+            `ラン開始時の worktree 残置観測に失敗しているため monitoring 再開を defer した` +
+            `（観測失敗時は fix-routing-error worktree の新規作成で残置総数を確認できないまま上限を` +
+            `超過し得るため fail-closed で待機する）。git worktree list が実行できる状態を確認してから再実行すること`
+          monitoringResumeGateDeferred.set(n, deferReason)
+          log(`⚠️ #${n}: ${deferReason}`)
+          continue
+        }
+        if (item.kind === 'implement' && maxResidualWorktrees > 0 && residualObserved) {
+          const recordedByIssue = new Map()
+          for (const e of ephemeralWorktrees) {
+            recordedByIssue.set(e.issue, (recordedByIssue.get(e.issue) ?? 0) + 1)
+          }
+          let reservedTotal = 0
+          for (const rn of newStartActive) {
+            reservedTotal += Math.max(0, EPHEMERAL_RESERVE_PER_NEW_START - (recordedByIssue.get(rn) ?? 0))
+          }
+          for (const rn of monitoringResumeActive) {
+            reservedTotal += Math.max(0, EPHEMERAL_RESERVE_PER_MONITORING_RESUME - (recordedByIssue.get(rn) ?? 0))
+          }
+          const projected =
+            residualObservedAtStart + ephemeralWorktrees.length + reservedTotal + EPHEMERAL_RESERVE_PER_MONITORING_RESUME
+          if (projected > maxResidualWorktrees) {
+            const deferReason =
+              `残置 worktree が予約込みで上限 ${maxResidualWorktrees} 件を超過する見込みのため monitoring 再開を defer した` +
+              `（開始時 ${residualObservedAtStart} 件＋本ラン積み増し ${ephemeralWorktrees.length} 件＋` +
+              `実行中タスクの残余予約 ${reservedTotal} 件＋再開候補の最大増分 ${EPHEMERAL_RESERVE_PER_MONITORING_RESUME} 件）。` +
+              `不要な worktree を git worktree remove で手動削除してから再実行すること`
+            monitoringResumeGateDeferred.set(n, deferReason)
+            log(`⚠️ #${n}: ${deferReason}`)
+            continue
+          }
+        }
+        // 直前の周回までに defer していても今回ゲートを通過したため、古い defer 理由を残さない
+        // （local-llm-server #591 codex-review P1 / issue #201 対応）。削除せずに残すと、この
+        // 再開が今回 halted 等で monitoring/blocked のまま終了した場合、ラン終了時の interrupted
+        // レポートが「同じ引数で再実行しても defer を繰り返すだけ」という古い手動介入案内を
+        // 誤って出し続け、実際には通常の monitor 再開で解決する状況を手動 worktree 削除必須と
+        // 誤案内してしまう（defer が解消した事実を反映していないため）。
+        monitoringResumeGateDeferred.delete(n)
         log(`#${n}: monitoring 再開（PR #${savedItems[String(n)].pr}）: ${sanitize(item.title)}`)
-        monitoringResumeActive.add(n)
+        // monitoringResumeActive には kind: 'implement' の再開のみ載せる（Cursor Bugbot Low 対応。
+        // PR #200 レビュー）。verify-close の再開は上の projected 判定でも予約 0 として扱っている
+        // のに、ここで無条件に add すると reservedTotal 計算（このブロック・下の implement 判定
+        // (b) 双方）が実記録 0 の verify-close イシューにも EPHEMERAL_RESERVE_PER_MONITORING_RESUME
+        // 分の幽霊予約を積み、他の implement 再開・新規着手候補を過剰に defer/抑止しかねない。
+        // newStartActive が verify-close を載せない設計（PR #185 Bugbot Medium）と同じ線引き。
+        if (item.kind === 'implement') monitoringResumeActive.add(n)
         running.set(n, runOne(item))
         continue
       }
       // 残置 worktree 上限超過時（PR #588 codex P1）は新規イシューの着手を抑止する。
-      // monitoring 再開（上の分岐で通過済み。fix-routing-error 最大 1 件のみ積み増し得るが
-      // 予約計上で見込む）は抑止しない。
+      // monitoring 再開（上の分岐で通過済み）はこの newStartSuppressed による恒久停止の対象では
+      // ない — 恒久停止まで課すと、レビュー未収束等で monitoring/blocked のまま長期化した既存 PR
+      // が上限解消（利用者の手動掃除）まで永遠に再開不能になり得るため。ただし fix-routing-error
+      // 最大 1 件の積み増しは上の分岐で projected 判定（周回単位の defer）により個別にゲートする
+      // （pet-hub PR #1062 codex-review P1 対応）。
       // この continue は実装投入（implement / review / pr-create で worktree を積み増す本来の抑止対象）
       // に加え verify-close 等の新規着手も一律に止めるが、worktree を積まない着手まで巻き込むのは
       // 過剰抑止＝安全側であり許容する（queue は毎ラン GitHub の open/closed 実態で再構築されるため
@@ -5159,12 +5258,15 @@ for (const n of interrupted) {
   // 実態の矛盾防止）。isActiveMonitoring は blocked（pr 保存済み）も再開対象に含めるため、
   // monitoring 固定で報告すると状態ファイルと食い違う（PR #124 Bugbot Medium 対応）
   const { pr, status } = savedItems[String(n)]
-  results.push({
-    issue: n,
-    status,
-    pr,
-    note: `中断時に ${status}（PR #${pr} 作成済み）。同じ引数で再実行すると monitor から再開する`,
-  })
+  // 残置 worktree 上限ゲートで defer された場合は「同じ引数で再実行すると再開する」という
+  // 既定文言が誤りになる（上限を手動解消しない限り再実行しても defer を繰り返すだけ）ため、
+  // monitoringResumeGateDeferred に記録した手動介入込みの理由で上書きする
+  // （pet-hub PR #1062 codex-review P1 対応）。
+  const deferredReason = monitoringResumeGateDeferred.get(n)
+  const note = deferredReason
+    ? `中断時に ${status}（PR #${pr} 作成済み）。${deferredReason}`
+    : `中断時に ${status}（PR #${pr} 作成済み）。同じ引数で再実行すると monitor から再開する`
+  results.push({ issue: n, status, pr, note })
   log(`#${n}: halt 時も ${status} 状態を維持する（PR #${pr} の再開情報を保持）`)
 }
 if (notStarted.length > 0) {
