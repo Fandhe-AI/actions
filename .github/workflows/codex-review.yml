@@ -609,14 +609,17 @@ jobs:
             if (result.review_completed === true) {
               try {
                 // GITHUB_TOKEN 投稿コメントの author login は GraphQL では
-                // 'github-actions'（REST 表記は 'github-actions[bot]'）。両方許容する
+                // 'github-actions'（REST 表記は 'github-actions[bot]'）。両方許容する。
+                // 対象はマーカー付きコメントのみ: github-actions はリポジトリ内の
+                // 全 workflow が共有する投稿者のため、表示形式（アイコン + P0..P3）
+                // だけでは本 workflow の指摘と識別できず、他の自動レビューの未解決
+                // スレッドを誤って閉じうる。マーカー導入前の旧コメントは自動 resolve
+                // の対象外（残っていれば手動で resolve する）
                 const isOwnFinding = c =>
                   c &&
                   (c.author?.login === 'github-actions' || c.author?.login === 'github-actions[bot]') &&
                   typeof c.body === 'string' &&
-                  (c.body.includes(FINDING_MARKER) ||
-                    // マーカー導入前の旧形式（アイコン + **P0..P3** で始まる）も対象にする
-                    /^(?:🟥|🟧|🟨|⬜) \*\*P[0-3]\*\* /.test(c.body));
+                  c.body.includes(FINDING_MARKER);
                 let cursor = null;
                 for (let page = 0; page < 10; page += 1) {
                   const res = await github.graphql(
@@ -671,6 +674,29 @@ jobs:
             // 消える瞬間ができるため後段で行う。フォールバック時も指摘全文は
             // コメント側で配達済みのため resolve してよい）。個別の失敗は他の
             // スレッドの resolve を止めない
+            // 並行実行対策: resolve 直前に PR の現在の head SHA を再取得し、この実行が
+            // レビューした head が最新である場合のみ resolve する。呼び出し側 wrapper の
+            // concurrency（cancel-in-progress）が無い・効かない構成で、古い synchronize
+            // 実行が遅れてここへ到達しても、head が進んでいれば resolve を放棄するため、
+            // 新しい実行が投稿したスレッドを旧扱いで閉じることがない（確認に失敗した
+            // 場合も安全側 = resolve しない）
+            if (staleThreadIds.length > 0) {
+              try {
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                });
+                if (pr.head.sha !== context.payload.pull_request.head.sha) {
+                  core.warning(`PR の head が進んでいる（${pr.head.sha}）ため旧スレッドの自動 resolve をスキップします（最新実行側で処理される）`);
+                  staleThreadIds.length = 0;
+                }
+              } catch (e) {
+                core.warning(`PR の現在 head の確認に失敗したため自動 resolve をスキップします: ${e.message}`);
+                staleThreadIds.length = 0;
+              }
+            }
+
             let resolved = 0;
             for (const threadId of staleThreadIds) {
               try {
