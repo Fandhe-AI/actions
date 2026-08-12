@@ -37,7 +37,9 @@ name: Codex PR review (reusable)
 #   素通りする fail-open を防ぐ）→ (2) ブロック対象 priority（`block-priorities` 入力で
 #   リポジトリごとに調整可能。既定 P0/P1）の指摘が 1 件でもあればジョブ失敗
 # - コメント投稿は 2 ジョブ分離パターン（codex ジョブは contents: read のみで資格情報を扱い、
-#   書き込み権限（pull-requests: write）を持つジョブには渡さない）
+#   書き込み権限（pull-requests: write）を持つジョブには渡さない）。投稿は PR レビュー
+#   （総括 body + 行を特定できた指摘のインラインコメント）で行い、投稿失敗時は従来の
+#   単一 issue コメントへフォールバックする
 # - concurrency は reusable workflow のトップレベルでは機能しないため、呼び出し側 wrapper で
 #   設定する（README の wrapper 例参照）
 
@@ -443,7 +445,14 @@ jobs:
           fi
           echo "ブロック対象（${display}）の指摘なし（gate 通過）"
 
-  # gate 失敗時（needs.codex.result == 'failure'）でもレビュー結果コメントは投稿する
+  # gate 失敗時（needs.codex.result == 'failure'）でもレビュー結果コメントは投稿する。
+  # 投稿は PR レビュー（pulls.createReview）で行い、総括（summary + 指摘一覧の内訳）を
+  # レビュー body に、行を特定できた finding は該当行へのインラインコメントにする。
+  # インラインのアンカーは PR の diff に現れた行（RIGHT 側）に限られるため、
+  # pulls.listFiles の patch から有効な (path, line) 集合を組み立てて事前に検証し、
+  # アンカーできない finding は body 側の一覧へ残す（指摘を欠落させない）。
+  # createReview が失敗した場合は従来どおり issue コメント 1 件へフォールバックする
+  # （レビュー結果を握りつぶさない）
   post_feedback:
     runs-on: ${{ inputs.post-feedback-runner-label }}
     timeout-minutes: 10
@@ -458,29 +467,150 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const raw = process.env.CODEX_FINAL_MESSAGE;
-            let body;
+            const icon = { P0: '🟥', P1: '🟧', P2: '🟨', P3: '⬜' };
+            const heading = '## Codex PR レビュー';
+            const renderFinding = f =>
+              `- ${icon[f.priority] ?? '⬜'} **${f.priority}** ${f.title}（\`${f.location}\`）\n  ${String(f.detail).replace(/\n/g, '\n  ')}`;
+
+            // フォールバック（従来形式の issue コメント 1 件）。スキーマ外の出力・
+            // createReview 失敗時に使う
+            const postPlainComment = async body => {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+            };
+
+            let result;
             try {
-              const result = JSON.parse(raw);
-              const icon = { P0: '🟥', P1: '🟧', P2: '🟨', P3: '⬜' };
-              const findings = (result.findings ?? [])
-                .map(f => `- ${icon[f.priority] ?? '⬜'} **${f.priority}** ${f.title}（\`${f.location}\`）\n  ${String(f.detail).replace(/\n/g, '\n  ')}`)
-                .join('\n');
-              // review_completed !== true は gate（Gate on review completion）が
-              // fail-closed で失敗させる異常系。findings が空でも「指摘はありません。」
-              // という正常系相当の表示にはせず、未完了である旨を明示する
-              const findingsSection = result.review_completed === true
-                ? (findings ? `### 指摘\n\n${findings}` : '指摘はありません。')
-                : '⚠️ レビューが完了していません（gate 失敗。上記 summary の失敗理由を参照）。';
-              body = `## Codex PR レビュー\n\n${result.summary}\n\n${findingsSection}`;
+              result = JSON.parse(raw);
             } catch {
               // スキーマ外の出力でもレビュー内容は握りつぶさずそのまま提示する
-              body = `## Codex PR レビュー\n\n${raw}`;
+              await postPlainComment(`${heading}\n\n${raw}`);
+              return;
             }
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body,
-            });
+
+            const findings = Array.isArray(result.findings) ? result.findings.filter(f => f && typeof f === 'object') : [];
+
+            // インラインコメントのアンカー先検証: PR の diff（patch）から RIGHT 側
+            // （HEAD 側）で有効な行番号集合を path ごとに組み立てる。追加行と文脈行が
+            // 対象（削除行は LEFT 側のためインライン対象にしない）。patch が無い
+            // ファイル（バイナリ・巨大差分）はアンカー不可として body 側へ回す。
+            // review_completed !== true（レビュー未完遂）の場合は集合を空のままにし、
+            // 部分的な findings を確定した指摘のようにインライン表示しない。
+            // listFiles の失敗（レート制限・一時エラー等）は投稿自体を殺さず、
+            // 集合を空のまま（= 全指摘を body 側へ）続行する（fail-closed な配達の維持）
+            const validLines = new Map();
+            if (result.review_completed === true && findings.length > 0) {
+              try {
+                const files = await github.paginate(github.rest.pulls.listFiles, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                  per_page: 100,
+                });
+                for (const file of files) {
+                  if (!file.patch) continue;
+                  const lines = new Set();
+                  let right = 0;
+                  for (const l of file.patch.split('\n')) {
+                    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+                    if (hunk) {
+                      right = Number(hunk[1]);
+                      continue;
+                    }
+                    if (l.startsWith('+') || l.startsWith(' ')) {
+                      lines.add(right);
+                      right += 1;
+                    } // '-'（削除行）・'\ No newline...' は RIGHT 側の行を消費しない
+                  }
+                  validLines.set(file.filename, lines);
+                }
+              } catch (e) {
+                core.warning(`pulls.listFiles が失敗したため、インラインコメントを付けず全指摘を body 側の一覧で投稿します: ${e.message}`);
+              }
+            }
+
+            // finding の位置情報: 構造化フィールド（path / line）があればそれのみを使う
+            // （明示の path="" / line=0 は「ファイル・行に紐付かない指摘」の意思表示の
+            // ため location へフォールバックしない。location は表示用の代表 1 箇所で、
+            // ファイル全体への指摘を代表行へ誤ってインライン化しうる）。構造化
+            // フィールドが無い旧 schema（カスタム版）の出力に限り、後方互換として
+            // location（"file:line"）のパースへフォールバックする
+            const anchorOf = f => {
+              let path;
+              let line;
+              if (typeof f.path === 'string' && Number.isInteger(f.line)) {
+                path = f.path;
+                line = f.line;
+              } else if (typeof f.location === 'string') {
+                const m = /^(.+?):(\d+)/.exec(f.location);
+                if (!m) return null;
+                path = m[1];
+                line = Number(m[2]);
+              } else {
+                return null;
+              }
+              return validLines.get(path)?.has(line) ? { path, line } : null;
+            };
+
+            const inline = [];
+            const bodyOnly = [];
+            for (const f of findings) {
+              const anchor = anchorOf(f);
+              if (anchor) {
+                inline.push({
+                  path: anchor.path,
+                  line: anchor.line,
+                  side: 'RIGHT',
+                  body: `${icon[f.priority] ?? '⬜'} **${f.priority}** ${f.title}\n\n${f.detail}`,
+                });
+              } else {
+                bodyOnly.push(f);
+              }
+            }
+
+            // review_completed !== true は gate（Gate on review completion）が
+            // fail-closed で失敗させる異常系。findings が空でも「指摘はありません。」
+            // という正常系相当の表示にはせず、未完了である旨を明示する
+            let findingsSection;
+            if (result.review_completed !== true) {
+              findingsSection = '⚠️ レビューが完了していません（gate 失敗。上記 summary の失敗理由を参照）。';
+            } else if (findings.length === 0) {
+              findingsSection = '指摘はありません。';
+            } else {
+              const parts = [`### 指摘（${findings.length} 件）`];
+              if (inline.length > 0) {
+                parts.push(`${inline.length} 件は該当行へインラインコメントとして投稿しています。`);
+              }
+              if (bodyOnly.length > 0) {
+                parts.push(bodyOnly.map(renderFinding).join('\n'));
+              }
+              findingsSection = parts.join('\n\n');
+            }
+            const body = `${heading}\n\n${result.summary}\n\n${findingsSection}`;
+
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                commit_id: context.payload.pull_request.head.sha,
+                event: 'COMMENT',
+                body,
+                comments: inline,
+              });
+            } catch (e) {
+              // インラインのアンカー不整合（422）等でレビュー投稿に失敗しても、
+              // 指摘の全文を従来形式の単一コメントで必ず届ける
+              core.warning(`pulls.createReview が失敗したため issue コメントへフォールバックします: ${e.message}`);
+              const fallbackFindings = findings.length > 0 ? findings.map(renderFinding).join('\n') : null;
+              const fallbackSection = result.review_completed === true
+                ? (fallbackFindings ? `### 指摘（${findings.length} 件）\n\n${fallbackFindings}` : '指摘はありません。')
+                : '⚠️ レビューが完了していません（gate 失敗。上記 summary の失敗理由を参照）。';
+              await postPlainComment(`${heading}\n\n${result.summary}\n\n${fallbackSection}`);
+            }
         env:
           CODEX_FINAL_MESSAGE: ${{ needs.codex.outputs.final_message }}
