@@ -41,7 +41,7 @@
           "line": {
             "type": "integer",
             "minimum": 0,
-            "description": "該当行番号（PR 側 = HEAD の行番号、1 始まり。差分に現れた行を指すこと。行を特定できない・ファイル全体への指摘は 0）"
+            "description": "該当行番号（PR ブランチ側 = HEAD^2 = PR head の行番号、1 始まり。差分に現れた行を指すこと。行を特定できない・ファイル全体への指摘は 0）"
           },
           "detail": {
             "type": "string",

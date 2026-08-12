@@ -43,10 +43,15 @@ Fandhe-AI/actions の codex-review reusable workflow が、呼び出し側リポ
 各 finding には、PR へのインラインコメントのアンカーに使う `path` と `line` を必ず入れる:
 
 - `path`: リポジトリルートからの相対パス。特定のファイルに紐付かない指摘は空文字列 `""`。
-- `line`: PR 側（HEAD、マージコミット）の 1 始まりの行番号。**差分に現れた行**
-  （`git diff HEAD^1 HEAD` の追加行、またはその文脈行）を指すこと。行を特定できない・
-  ファイル全体への指摘は `0`。
-- `location` は従来どおり表示用の `file:line` 文字列として記入する。
+- `line`: **PR ブランチ側（`HEAD^2` = PR head）**の 1 始まりの行番号で、差分に現れた行
+  （追加行またはその文脈行）を指すこと。インラインコメントは PR head の diff に対して
+  アンカーされるため、`git diff HEAD^1 HEAD`（マージ結果基準）の行番号をそのまま使うと、
+  base 側が同じファイルを変更している場合にずれる。ずれが疑われる場合（`git diff HEAD^1 HEAD^2 -- <path>`
+  と `git diff HEAD^1 HEAD -- <path>` が異なる等）は `git show HEAD^2:<path>` の内容で
+  行番号を確認し、確認できなければ `0` とすること。行を特定できない・ファイル全体への
+  指摘も `0`。
+- `location` は従来どおり表示用の `file:line` 文字列として記入する（行番号は `line` と
+  同じ基準でよい）。
 
 ## 実行環境の制約（重要）
 
