@@ -6,6 +6,10 @@ OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の�
 検出時は CI ジョブを失敗させる。指摘は差分から見つかったものを 1 回のレビューで全件列挙する。
 行を特定できない指摘（`path`/`line` 欠落・diff 外の行）はレビュー body 側の一覧に載り、
 レビュー投稿自体に失敗した場合は従来形式の単一 issue コメントへフォールバックする。
+再レビュー時（PR の synchronize 等）は、過去の実行が投稿した未解決インラインスレッドを
+自動で resolve する（レビューは毎回、現時点の指摘を全件投稿し直すため。解消していない
+指摘は新しいスレッドとして再投稿される。レビュー未完遂 `review_completed != true` の
+場合は fail-closed で resolve しない）。
 
 - 認証は **codex-home 方式**: OpenAI API キーは使わず、self-hosted runner 上に用意した
   ChatGPT ログイン済みの `CODEX_HOME` ディレクトリを参照する（ChatGPT プランのレート枠で動作）

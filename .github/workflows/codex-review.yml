@@ -556,6 +556,10 @@ jobs:
               return validLines.get(path)?.has(line) ? { path, line } : null;
             };
 
+            // 本 workflow が投稿したインラインコメントの識別マーカー（HTML コメント
+            // のため表示されない）。次回レビュー時の自動 resolve の対象判定に使う
+            const FINDING_MARKER = '<!-- codex-review-finding -->';
+
             const inline = [];
             const bodyOnly = [];
             for (const f of findings) {
@@ -565,7 +569,7 @@ jobs:
                   path: anchor.path,
                   line: anchor.line,
                   side: 'RIGHT',
-                  body: `${icon[f.priority] ?? '⬜'} **${f.priority}** ${f.title}\n\n${f.detail}`,
+                  body: `${icon[f.priority] ?? '⬜'} **${f.priority}** ${f.title}\n\n${f.detail}\n\n${FINDING_MARKER}`,
                 });
               } else {
                 bodyOnly.push(f);
@@ -592,6 +596,55 @@ jobs:
             }
             const body = `${heading}\n\n${result.summary}\n\n${findingsSection}`;
 
+            // 旧スレッドの自動 resolve 対象の収集: 過去の実行で本 workflow が投稿した
+            // 未解決インラインスレッドを、新しいレビューの投稿**前**に列挙しておく
+            // （投稿後に列挙すると今回作成したスレッドと区別できないため）。
+            // 今回のレビューは現時点の指摘を毎回全件投稿し直すため、旧スレッドは
+            // 解消済み・位置ずれを問わず陳腐化しており、resolve して閉じてよい
+            // （未解消の指摘は今回のレビューが新スレッドとして再投稿する）。
+            // review_completed !== true（レビュー未完遂）の場合は今回の findings が
+            // 全量である保証がないため resolve しない（fail-closed）。
+            // 列挙・resolve の失敗はレビュー投稿自体を殺さず warning で続行する。
+            const staleThreadIds = [];
+            if (result.review_completed === true) {
+              try {
+                // GITHUB_TOKEN 投稿コメントの author login は GraphQL では
+                // 'github-actions'（REST 表記は 'github-actions[bot]'）。両方許容する
+                const isOwnFinding = c =>
+                  c &&
+                  (c.author?.login === 'github-actions' || c.author?.login === 'github-actions[bot]') &&
+                  typeof c.body === 'string' &&
+                  (c.body.includes(FINDING_MARKER) ||
+                    // マーカー導入前の旧形式（アイコン + **P0..P3** で始まる）も対象にする
+                    /^(?:🟥|🟧|🟨|⬜) \*\*P[0-3]\*\* /.test(c.body));
+                let cursor = null;
+                for (let page = 0; page < 10; page += 1) {
+                  const res = await github.graphql(
+                    `query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                      repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) {
+                          reviewThreads(first: 100, after: $cursor) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes { id isResolved comments(first: 1) { nodes { body author { login } } } }
+                          }
+                        }
+                      }
+                    }`,
+                    { owner: context.repo.owner, repo: context.repo.repo, number: context.payload.pull_request.number, cursor },
+                  );
+                  const threads = res.repository.pullRequest.reviewThreads;
+                  for (const t of threads.nodes) {
+                    if (!t.isResolved && isOwnFinding(t.comments.nodes[0])) staleThreadIds.push(t.id);
+                  }
+                  if (!threads.pageInfo.hasNextPage) break;
+                  cursor = threads.pageInfo.endCursor;
+                }
+              } catch (e) {
+                core.warning(`旧レビュースレッドの列挙に失敗したため自動 resolve をスキップします: ${e.message}`);
+                staleThreadIds.length = 0;
+              }
+            }
+
             try {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
@@ -611,6 +664,27 @@ jobs:
                 ? (fallbackFindings ? `### 指摘（${findings.length} 件）\n\n${fallbackFindings}` : '指摘はありません。')
                 : '⚠️ レビューが完了していません（gate 失敗。上記 summary の失敗理由を参照）。';
               await postPlainComment(`${heading}\n\n${result.summary}\n\n${fallbackSection}`);
+            }
+
+            // 新しいレビュー（またはフォールバックコメント）の投稿後に旧スレッドを
+            // resolve する（先に resolve すると、投稿失敗時に旧指摘の見え方だけが
+            // 消える瞬間ができるため後段で行う。フォールバック時も指摘全文は
+            // コメント側で配達済みのため resolve してよい）。個別の失敗は他の
+            // スレッドの resolve を止めない
+            let resolved = 0;
+            for (const threadId of staleThreadIds) {
+              try {
+                await github.graphql(
+                  `mutation($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }`,
+                  { threadId },
+                );
+                resolved += 1;
+              } catch (e) {
+                core.warning(`旧レビュースレッド（${threadId}）の resolve に失敗しました: ${e.message}`);
+              }
+            }
+            if (staleThreadIds.length > 0) {
+              core.info(`旧レビュースレッドを ${resolved}/${staleThreadIds.length} 件 resolve しました`);
             }
         env:
           CODEX_FINAL_MESSAGE: ${{ needs.codex.outputs.final_message }}
