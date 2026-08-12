@@ -1,8 +1,11 @@
 # codex-review
 
 OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の差分を Codex がレビューし、
-優先度付きの指摘（P0〜P3）を PR コメントへ投稿、ブロック対象 priority（`block-priorities`
-入力でリポジトリごとに調整可能。既定 P0/P1）の検出時は CI ジョブを失敗させる。
+優先度付きの指摘（P0〜P3）を **PR レビュー（総括 + 該当行へのインラインコメント）**として
+投稿、ブロック対象 priority（`block-priorities` 入力でリポジトリごとに調整可能。既定 P0/P1）の
+検出時は CI ジョブを失敗させる。指摘は差分から見つかったものを 1 回のレビューで全件列挙する。
+行を特定できない指摘（`path`/`line` 欠落・diff 外の行）はレビュー body 側の一覧に載り、
+レビュー投稿自体に失敗した場合は従来形式の単一 issue コメントへフォールバックする。
 
 - 認証は **codex-home 方式**: OpenAI API キーは使わず、self-hosted runner 上に用意した
   ChatGPT ログイン済みの `CODEX_HOME` ディレクトリを参照する（ChatGPT プランのレート枠で動作）
@@ -113,8 +116,9 @@ gh run view <run-id> --repo Fandhe-AI/<repo> --json jobs \
   --jq '.jobs[] | {name, status, conclusion}'
 ```
 
-`codex` ジョブの `conclusion` が `skipped` でなく、PR に「Codex PR レビュー」コメントが
-投稿されていれば導入完了。`skipped` の場合は「注意事項」のトラブルシューティングを参照。
+`codex` ジョブの `conclusion` が `skipped` でなく、PR に「Codex PR レビュー」の
+PR レビュー（またはフォールバック時の issue コメント）が投稿されていれば導入完了。
+`skipped` の場合は「注意事項」のトラブルシューティングを参照。
 
 ### 6. レビュー基準のカスタマイズ（任意）
 
@@ -125,7 +129,7 @@ gh run view <run-id> --repo Fandhe-AI/<repo> --json jobs \
 |---|---|
 | `AGENTS.md` | リポジトリ固有の規約・レビュー基準。存在すれば prompt がベースブランチ側の内容を必ず読む |
 | `.github/codex/prompts/review.md` | レビュー指示文そのもの（同梱既定版を差し替える。既定版を出発点にコピーして編集するとよい） |
-| `.github/codex/review-schema.json` | 出力スキーマ（`summary` / `findings` / `review_completed` は gate・コメント描画が消費するため必須のまま維持する） |
+| `.github/codex/review-schema.json` | 出力スキーマ（`summary` / `findings` / `review_completed` は gate・コメント描画が消費するため必須のまま維持する。finding の `path` / `line` はインラインコメントのアンカーに使い、欠落時は `location` の `file:line` パースへフォールバックする） |
 
 制御ファイルは PR の checkout からではなく **PR の base コミット**から読まれるため、
 PR 自身がレビュー基準を書き換えても当の PR のレビューには反映されない（マージ後の PR から反映）。
