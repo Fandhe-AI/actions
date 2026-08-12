@@ -497,44 +497,61 @@ jobs:
             // インラインコメントのアンカー先検証: PR の diff（patch）から RIGHT 側
             // （HEAD 側）で有効な行番号集合を path ごとに組み立てる。追加行と文脈行が
             // 対象（削除行は LEFT 側のためインライン対象にしない）。patch が無い
-            // ファイル（バイナリ・巨大差分）はアンカー不可として body 側へ回す
+            // ファイル（バイナリ・巨大差分）はアンカー不可として body 側へ回す。
+            // review_completed !== true（レビュー未完遂）の場合は集合を空のままにし、
+            // 部分的な findings を確定した指摘のようにインライン表示しない。
+            // listFiles の失敗（レート制限・一時エラー等）は投稿自体を殺さず、
+            // 集合を空のまま（= 全指摘を body 側へ）続行する（fail-closed な配達の維持）
             const validLines = new Map();
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
-            for (const file of files) {
-              if (!file.patch) continue;
-              const lines = new Set();
-              let right = 0;
-              for (const l of file.patch.split('\n')) {
-                const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
-                if (hunk) {
-                  right = Number(hunk[1]);
-                  continue;
+            if (result.review_completed === true && findings.length > 0) {
+              try {
+                const files = await github.paginate(github.rest.pulls.listFiles, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                  per_page: 100,
+                });
+                for (const file of files) {
+                  if (!file.patch) continue;
+                  const lines = new Set();
+                  let right = 0;
+                  for (const l of file.patch.split('\n')) {
+                    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+                    if (hunk) {
+                      right = Number(hunk[1]);
+                      continue;
+                    }
+                    if (l.startsWith('+') || l.startsWith(' ')) {
+                      lines.add(right);
+                      right += 1;
+                    } // '-'（削除行）・'\ No newline...' は RIGHT 側の行を消費しない
+                  }
+                  validLines.set(file.filename, lines);
                 }
-                if (l.startsWith('+') || l.startsWith(' ')) {
-                  lines.add(right);
-                  right += 1;
-                } // '-'（削除行）・'\ No newline...' は RIGHT 側の行を消費しない
+              } catch (e) {
+                core.warning(`pulls.listFiles が失敗したため、インラインコメントを付けず全指摘を body 側の一覧で投稿します: ${e.message}`);
               }
-              validLines.set(file.filename, lines);
             }
 
-            // finding の位置情報: 構造化フィールド（path / line）を優先し、無ければ
-            // 表示用 location（"file:line"）のパースへフォールバックする（旧 schema の
-            // カスタム版を使う呼び出し側リポジトリとの後方互換）
+            // finding の位置情報: 構造化フィールド（path / line）があればそれのみを使う
+            // （明示の path="" / line=0 は「ファイル・行に紐付かない指摘」の意思表示の
+            // ため location へフォールバックしない。location は表示用の代表 1 箇所で、
+            // ファイル全体への指摘を代表行へ誤ってインライン化しうる）。構造化
+            // フィールドが無い旧 schema（カスタム版）の出力に限り、後方互換として
+            // location（"file:line"）のパースへフォールバックする
             const anchorOf = f => {
-              let path = typeof f.path === 'string' ? f.path : '';
-              let line = Number.isInteger(f.line) ? f.line : 0;
-              if ((!path || line <= 0) && typeof f.location === 'string') {
+              let path;
+              let line;
+              if (typeof f.path === 'string' && Number.isInteger(f.line)) {
+                path = f.path;
+                line = f.line;
+              } else if (typeof f.location === 'string') {
                 const m = /^(.+?):(\d+)/.exec(f.location);
-                if (m) {
-                  path = path || m[1];
-                  line = line > 0 ? line : Number(m[2]);
-                }
+                if (!m) return null;
+                path = m[1];
+                line = Number(m[2]);
+              } else {
+                return null;
               }
               return validLines.get(path)?.has(line) ? { path, line } : null;
             };
