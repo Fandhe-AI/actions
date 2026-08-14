@@ -6,12 +6,16 @@ OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の�
 検出時は CI ジョブを失敗させる。指摘は差分から見つかったものを 1 回のレビューで全件列挙する。
 行を特定できない指摘（`path`/`line` 欠落・diff 外の行）はレビュー body 側の一覧に載り、
 レビュー投稿自体に失敗した場合は従来形式の単一 issue コメントへフォールバックする。
-再レビュー時（PR の synchronize 等）は、過去の実行が投稿した未解決インラインスレッド
-（識別マーカー `<!-- codex-review-finding -->` 付き。他 workflow の指摘は対象外）を
-自動で resolve する（レビューは毎回、現時点の指摘を全件投稿し直すため。解消していない
-指摘は新しいスレッドとして再投稿される。レビュー未完遂 `review_completed != true` の
-場合と、resolve 直前の確認で PR の head が進んでいた場合＝より新しい実行に委ねるべき
-場合は、fail-closed で resolve しない）。
+レビュー投稿の前後では、PR に残っている未解決レビュースレッドの後片付けも行う:
+(1) 過去の実行が投稿した未解決インラインスレッド（識別マーカー
+`<!-- codex-review-finding -->` 付き）は、陳腐化済みとして無条件に自動 resolve する
+（レビューは毎回、現時点の指摘を全件投稿し直すため。解消していない指摘は新しい
+スレッドとして再投稿される）。(2) それ以外の未解決スレッド（他レビュアー・マーカー
+導入前の旧コメント等）は、一覧を prompt に付加して Codex がレビュー時に現在の HEAD で
+対応済みかをコードで再判定し、**対応済みと確認できたものだけ**を resolve する
+（出力 `resolved_threads`。判定不能・未対応は残す fail-closed。一覧収集後にスレッドへ返信が追加された場合は、判定材料が陳腐化したものとして resolve しない。返信追加の検出は最新コメント id の版照合で行い、resolve の一括照合・直前再照合・直後の事後検証（検出時は unresolve で取り消し）の三段で競合窓を塞ぐ）。いずれも、レビュー未完遂
+`review_completed != true` の場合と、resolve 直前の確認で PR の head が進んでいた場合
+＝より新しい実行に委ねるべき場合は、fail-closed で resolve しない。
 
 - 認証は **codex-home 方式**: OpenAI API キーは使わず、self-hosted runner 上に用意した
   ChatGPT ログイン済みの `CODEX_HOME` ディレクトリを参照する（ChatGPT プランのレート枠で動作）
@@ -135,7 +139,7 @@ PR レビュー（またはフォールバック時の issue コメント）が�
 |---|---|
 | `AGENTS.md` | リポジトリ固有の規約・レビュー基準。存在すれば prompt がベースブランチ側の内容を必ず読む |
 | `.github/codex/prompts/review.md` | レビュー指示文そのもの（同梱既定版を差し替える。既定版を出発点にコピーして編集するとよい） |
-| `.github/codex/review-schema.json` | 出力スキーマ（`summary` / `findings` / `review_completed` は gate・コメント描画が消費するため必須のまま維持する。finding の `path` / `line` はインラインコメントのアンカーに使い、欠落時は `location` の `file:line` パースへフォールバックする） |
+| `.github/codex/review-schema.json` | 出力スキーマ（`summary` / `findings` / `review_completed` は gate・コメント描画が消費するため必須のまま維持する。`resolved_threads` が無いカスタム版では未解決スレッドの対応済み再判定が無効になる（他の動作には後方互換）。finding の `path` / `line` はインラインコメントのアンカーに使い、欠落時は `location` の `file:line` パースへフォールバックする） |
 
 制御ファイルは PR の checkout からではなく **PR の base コミット**から読まれるため、
 PR 自身がレビュー基準を書き換えても当の PR のレビューには反映されない（マージ後の PR から反映）。
