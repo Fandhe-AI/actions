@@ -873,8 +873,8 @@ jobs:
             // 現 HEAD のコードで対応済みを確認できたもののみ）。head 前進時の扱いは両者
             // 共通: 古い head に対する判定・投稿のため resolve を放棄する（安全側）
             const toResolve = [
-              ...staleThreadIds.map(id => ({ id, kind: '旧 codex スレッド' })),
-              ...addressedThreadIds.map(id => ({ id, kind: '対応済み判定スレッド' })),
+              ...staleThreadIds.map(id => ({ id, kind: '旧 codex スレッド', addressed: false })),
+              ...addressedThreadIds.map(id => ({ id, kind: '対応済み判定スレッド', addressed: true })),
             ];
             if (toResolve.length > 0) {
               try {
@@ -893,13 +893,60 @@ jobs:
               }
             }
 
+            // 対応済み判定スレッドは、一括照合（addressedThreadIds 算出時）だけでなく
+            // 各 mutation の直前にも単一スレッドを再照合し、さらに resolve 直後に事後
+            // 検証する（照合〜mutation 間・mutation 実行中に返信が追加される競合窓への
+            // 対処。API に CAS が無いため、事後検証で返信を検出したら unresolveReviewThread
+            // で取り消して fail-closed に倒す）。旧 codex スレッドは無条件 resolve の
+            // 契約（陳腐化済み・未解消の指摘は新レビューが再投稿する）のため対象外
+            const fetchThreadState = async threadId => {
+              const res = await github.graphql(
+                `query($id: ID!) {
+                  node(id: $id) {
+                    ... on PullRequestReviewThread {
+                      isResolved
+                      lastComment: comments(last: 1) { nodes { id } }
+                    }
+                  }
+                }`,
+                { id: threadId },
+              );
+              if (!res.node || typeof res.node.isResolved !== 'boolean') return null;
+              return { isResolved: res.node.isResolved, lastId: res.node.lastComment.nodes[0]?.id ?? null };
+            };
+
             let resolved = 0;
-            for (const { id: threadId, kind } of toResolve) {
+            for (const { id: threadId, kind, addressed } of toResolve) {
               try {
+                if (addressed) {
+                  const pre = await fetchThreadState(threadId);
+                  if (!pre || pre.isResolved || pre.lastId !== threadVersions[threadId]) {
+                    core.warning(`${kind}（${threadId}）は直前確認で状態が変化していた（返信追加・解決済み等）ため resolve をスキップします`);
+                    continue;
+                  }
+                }
                 await github.graphql(
                   `mutation($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }`,
                   { threadId },
                 );
+                if (addressed) {
+                  // mutation 実行中に返信が追加されていないかの事後検証。検証自体に
+                  // 失敗した場合も含め、確認できなければ resolve を取り消す（fail-closed）
+                  let post = null;
+                  try {
+                    post = await fetchThreadState(threadId);
+                  } catch {
+                    post = null;
+                  }
+                  if (!post || post.lastId !== threadVersions[threadId]) {
+                    await github.graphql(
+                      `mutation($threadId: ID!) { unresolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }`,
+                      { threadId },
+                    );
+                    core.warning(`${kind}（${threadId}）は resolve 中の返信追加（または事後検証不能）を検出したため resolve を取り消しました`);
+                    continue;
+                  }
+                }
                 resolved += 1;
               } catch (e) {
                 core.warning(`${kind}（${threadId}）の resolve に失敗しました: ${e.message}`);
