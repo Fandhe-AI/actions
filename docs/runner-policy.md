@@ -39,7 +39,7 @@ jobs:
 
 ## 2. 対象リポジトリ一覧
 
-2026-08-08 時点の該当リポジトリ。
+2026-08-14 時点の該当リポジトリ。
 
 ### public（GitHub ホステッド）
 
@@ -48,11 +48,11 @@ jobs:
 - `agent-reference-skills`
 - `actions`（本リポジトリ）
 - `fandhe-backend`（2026-08-08 に public 化。CI のホステッド移行は同リポジトリ #550 で実施）
+- `rust-ai-library`（2026-08-14 に public 化。CI のホステッド移行は同リポジトリ #457 で実施）
 
 ### private（self-hosted）
 
 - `local-llm-server`
-- `rust-ai-library`
 - `team-hub`
 - `articles`
 - `ideas`
