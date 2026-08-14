@@ -13,7 +13,7 @@ OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の�
 スレッドとして再投稿される）。(2) それ以外の未解決スレッド（他レビュアー・マーカー
 導入前の旧コメント等）は、一覧を prompt に付加して Codex がレビュー時に現在の HEAD で
 対応済みかをコードで再判定し、**対応済みと確認できたものだけ**を resolve する
-（出力 `resolved_threads`。判定不能・未対応は残す fail-closed）。いずれも、レビュー未完遂
+（出力 `resolved_threads`。判定不能・未対応は残す fail-closed。一覧収集後にスレッドへ返信が追加された場合は、判定材料が陳腐化したものとして resolve しない）。いずれも、レビュー未完遂
 `review_completed != true` の場合と、resolve 直前の確認で PR の head が進んでいた場合
 ＝より新しい実行に委ねるべき場合は、fail-closed で resolve しない。
 
