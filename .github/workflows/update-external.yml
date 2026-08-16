@@ -66,27 +66,19 @@ jobs:
   submodule:
     name: Update submodule references
     if: ${{ github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "submodule"]'), inputs.target) }}
-    # 実行ランナーはリポジトリ変数 UPDATE_EXTERNAL_RUNNER で上書きできる。
-    # Settings > Secrets and variables > Actions > Variables に追加する。
+    # runner はこのリポジトリの可視性に基づき固定する（docs/runner-policy.md
+    # 「1. 方針」: public = GitHub ホステッド、self-hosted は codex-review の
+    # codex ジョブのみの例外。docs/runner-policy.md「2. 対象リポジトリ一覧」の
+    # public 節に本リポジトリ自身 `actions` が明記されている）。
     #
-    # 【値の書式】必ず JSON リテラルで指定する。
-    #   複数ラベル: ["self-hosted","Linux"]   ← self-hosted 必須リポの推奨値
-    #   単一ラベル: "ubuntu-22.04"            ← 前後の二重引用符ごと設定する
-    #
-    # 素の `self-hosted`（引用符なし）は JSON として不正であり、fromJSON が
-    # 失敗して workflow 全体が起動しなくなるため設定してはならない。
-    #
-    # 複数ラベルを推奨する理由: 単一の `self-hosted` ラベルは OS を限定しない。
-    # Windows ランナーへ割り当てられると後続 run が既定の PowerShell で実行され、
-    # POSIX シェル構文（`if [ -z ... ]`）や composite action が前提とする bash が
-    # 壊れる。OS ラベルを併記して Linux ランナーへ確定させる。
-    #
-    # 未設定のリポジトリは従来どおり GitHub ホステッドの ubuntu-latest で動く。
-    # `||` を fromJSON の外（文字列側）に置いているのは、配列値の真偽判定が
-    # GitHub Actions 式仕様として明文化されておらず、`vars.X && fromJSON(vars.X)
-    # || 'ubuntu-latest'` 形式だと self-hosted 指定が黙って ubuntu-latest へ
-    # フォールバックする（fail-open する）恐れがあるため。
-    runs-on: ${{ fromJSON(vars.UPDATE_EXTERNAL_RUNNER || '"ubuntu-latest"') }}
+    # 本ファイルは `workflow_call` を持たず、他リポジトリへ配布される reusable
+    # workflow ではなく、Fandhe-AI/actions 自身（public リポジトリ）を対象に
+    # 動く運用 workflow である。したがって「消費側リポジトリごとに可視性が
+    # 異なる」ケースは存在せず、変数で runner を切り替える仕組みは不要。
+    # 本リポジトリの規約どおり ubuntu-latest に固定する
+    # （self-hosted へ切り替え可能にすると public workflow から self-hosted
+    # runner を選べる状態になり、runner 方針の例外を無告知に拡大してしまう）。
+    runs-on: ubuntu-latest
     # 外部取得・submodule 更新・PR 作成の実処理量に見合う上限。ネットワーク
     # ハングやリモート応答待ちでランナーを占有し続けるのを防ぐ。
     timeout-minutes: 10
@@ -119,8 +111,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        # 他ステップと同様、self-hosted / Windows 割り当て時の既定 PowerShell を
-        # 避けるため POSIX シェルを明示する。
+        # AGENTS.md の bash 実装規約により、run は shell: bash 明示 +
+        # set -euo pipefail を runner 種別によらず必須とする。
         shell: bash
         run: |
           set -euo pipefail
@@ -178,9 +170,8 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         env:
           PAT: ${{ secrets.SUBMODULE_PAT }}
-        # self-hosted ランナー（特に Windows 割り当て時）の既定シェルは
-        # PowerShell であり、下記の POSIX シェル構文が解釈できない。
-        # 呼び出す composite action も bash 前提のため明示的に固定する。
+        # AGENTS.md の bash 実装規約により shell: bash を明示する
+        # （呼び出す composite action も bash 前提）。
         shell: bash
         run: |
           set -euo pipefail
@@ -240,13 +231,10 @@ jobs:
   skills:
     name: Update agent skills
     if: ${{ github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "skill"]'), inputs.target) }}
-    # 実行ランナーはリポジトリ変数 UPDATE_EXTERNAL_RUNNER で上書きできる。
-    # 値の書式・推奨値・fromJSON を使う理由は submodule ジョブ側の注記を参照。
-    # 要点のみ再掲すると、必ず JSON リテラル（複数ラベルなら
-    # ["self-hosted","Linux"]、単一ラベルなら "ubuntu-22.04"）を設定する。
-    # 素の `self-hosted` は JSON として不正で workflow 全体が起動しなくなる。
-    # 未設定のリポジトリは従来どおり GitHub ホステッドの ubuntu-latest で動く。
-    runs-on: ${{ fromJSON(vars.UPDATE_EXTERNAL_RUNNER || '"ubuntu-latest"') }}
+    # runner の固定理由は submodule ジョブ側の注記を参照（docs/runner-policy.md
+    # 「1. 方針」に基づき、public リポジトリである本リポジトリ自身が対象の
+    # 運用 workflow であるため ubuntu-latest に固定する）。
+    runs-on: ubuntu-latest
     # npx skills のダウンロード・全スキル更新・PR 作成の実処理量に見合う上限。
     # submodule ジョブより取得対象が多いため長めに取る。
     timeout-minutes: 15
@@ -262,9 +250,8 @@ jobs:
       - name: Verify PAT is configured
         env:
           PAT: ${{ secrets.SKILLS_PAT || secrets.SUBMODULE_PAT }}
-        # self-hosted ランナー（特に Windows 割り当て時）の既定シェルは
-        # PowerShell であり、下記の POSIX シェル構文が解釈できない。
-        # 呼び出す composite action も bash 前提のため明示的に固定する。
+        # AGENTS.md の bash 実装規約により shell: bash を明示する
+        # （呼び出す composite action も bash 前提）。
         shell: bash
         run: |
           set -euo pipefail
