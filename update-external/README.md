@@ -49,6 +49,69 @@ reusable 化により、下流が持つのは wrapper 1 ファイルだけにな
 | `submodule-auto-merge-allowlist` | `''` | 同 allowlist |
 | `skills-auto-merge` | `'false'` | スキル更新 PR の auto-merge。値域検証は `submodule-auto-merge` と同じ |
 | `skills-auto-merge-allowlist` | `''` | 同 allowlist |
+| `submodule-close-superseded` | `'false'` | 古い submodule 更新 PR（最新日付ブランチ以外）を close するか（`'true'` / `'false'` の文字列）。値域外は `validate-inputs` ジョブが fail-closed で失敗させる |
+| `skills-close-superseded` | `'false'` | 古いスキル更新 PR を close するか。値域検証は `submodule-close-superseded` と同じ |
+
+### 古い日次更新 PR の自動 close
+
+更新 PR のブランチ名は `{prefix}-{YYYYMMDD}` で日次に作り直されるため、マージされずに残った
+過去日付の PR は常に superseded になる（同じ内容が翌日のブランチで再生成される）。
+`*-close-superseded` を `'true'` にすると、更新ステップの後に最新日付の 1 件だけを残して
+残りを close + ブランチ削除する。
+
+#### 対象の絞り込み
+
+| 条件 | 効果 |
+|------|------|
+| `--base ${base-branch}` + `select(.baseRefName == $base)` | `base-branch` を base とする PR のみ。同じ prefix で別 base（release ブランチ等）の PR を誤って close しない。別 base の新しい PR に「最新」を奪われて保持すべき PR が閉じられることも防ぐ |
+| `select(.isCrossRepository | not)` | fork 由来 PR を除外 |
+| 日付部が `^[0-9]{8}$` に完全一致 | prefix が前方一致するだけの無関係ブランチを除外 |
+
+base の絞り込みは **サーバー側（`--base`）とフィルタ側（`baseRefName`）に二重**に置いている。
+サーバー側は転送量・レート消費の削減、フィルタ側はオフラインでの検証可能性のため
+（テストの fixture は `gh pr list` の**出力**を模すため、サーバー側だけに寄せると base
+絞り込みが検証不能になり、テスト済みのガードを未テストのガードへ置き換えることになる）。
+
+細工したブランチ名で正規 PR を close させられる余地を残さないため、prefix と base は
+`jq --arg` で値渡しする。
+
+#### close 失敗とブランチ削除失敗の扱い（非対称）
+
+`gh pr close --delete-branch` は使わず、**PR の close と ref の削除を別操作に分けている**。
+両者は契約が異なるため、失敗時の扱いも変える。
+
+| 操作 | 失敗時 | 理由 |
+|------|--------|------|
+| PR の close | `::error` + **ジョブを失敗させる**（`exit 1`） | close はこのステップの契約そのもの。失敗を握り潰すと、機能が一件も動作していなくても定期 workflow が成功し、呼び出し側が検知できない |
+| ブランチ削除 | `::warning` のみ（**終了コードは 0 のまま**） | 後片付け。削除保護 ruleset で弾かれても PR は閉じており機能の目的は達成されている。それだけで日次更新を赤くするのは割に合わない |
+
+ref の削除は `gh api --method DELETE repos/{owner}/{repo}/git/refs/heads/{branch}` で行う。
+ブランチ名のスラッシュ（`chore/skills-update-YYYYMMDD`）はそのまま解決され、URL エンコードは
+不要である（2026-08-17 に使い捨てブランチで実測。存在しない ref への DELETE は HTTP 422 /
+終了コード 1 を返すことも実測済みで、成否判定が成立する）。
+
+#### 取得件数の上限
+
+`gh pr list` は `--limit 1000` で取得し、上限に達した場合は `::warning` を出す。完全な
+ページネーションは行わない。取りこぼしは警告で必ず可視化されて沈黙せず、`--base` により母集団が
+「特定 base の open PR」に限定されるため、1000 件超は現実的な運用範囲の外にある。上限 +
+打ち切り警告のほうが、無制限ページネーションより API 消費が予測可能である。
+
+**既定を `'false'`（無効）にしている理由**: 下流 17 リポは wrapper から本 workflow を呼ぶだけの
+構成であり、既定を有効にすると wrapper を 1 行も触っていないリポジトリでも次回の定期実行から
+PR の自動 close が始まる。close は取り消しの効く操作とはいえ、各リポジトリのオーナーが
+知らないうちに open PR が消える挙動を既定にはしない。有効化は wrapper へ明示的に
+`submodule-close-superseded: 'true'` / `skills-close-superseded: 'true'` を書いた
+リポジトリだけに限る（オプトイン）。
+
+実装は composite action ではなく本 reusable workflow のジョブステップに置いている。理由は
+`.github/workflows/update-external.yml` の当該ステップの注記を参照（composite action は
+本 workflow から別 SHA で pin されており、`action.yml` を編集しても pin を上げるまで実行内容が
+変わらない。加えて未知の input は警告のみで job が緑のまま素通りするため、「緑なのに機能しない」
+状態を作りやすい）。
+
+なお本ステップは `jq` を必須とする。不在時は先頭のガードが `::error` を出して失敗する
+（黙って「対象なし」で緑終了すると、有効化したつもりで 1 件も閉じない状態に気付けないため）。
 
 `node-version`（`24.19.0`）・`skills-version`（`1.5.22`）・`auto-merge-immediate-fallback`
 （`'false'`）は **input にしていない**。ランタイムのサポート状況・CLI バージョン・

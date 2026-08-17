@@ -142,6 +142,24 @@ on:
         type: string
         required: false
         default: ''
+      submodule-close-superseded:
+        description: >
+          古い submodule 更新 PR（最新日付ブランチ以外）を close するか。
+          'true' / 'false' の文字列のみ受理し、値域外は validate-inputs ジョブが
+          fail-closed で失敗させる。既定は 'false'（無効）。auto-merge 系と同じく
+          boolean ではなく文字列で受けるのは、呼び出し側が vars を素通しできるように
+          するため（型を揃えないと wrapper 側で解決式を書き分ける必要が出る）。
+        type: string
+        required: false
+        default: 'false'
+      skills-close-superseded:
+        description: >
+          古いスキル更新 PR（最新日付ブランチ以外）を close するか。
+          'true' / 'false' の文字列のみ受理し、値域外は validate-inputs ジョブが
+          fail-closed で失敗させる。既定は 'false'（無効）。
+        type: string
+        required: false
+        default: 'false'
     secrets:
       SUBMODULE_PAT:
         description: >
@@ -229,6 +247,39 @@ jobs:
               ;;
           esac
           echo "::notice::auto-merge フラグの値域チェックを通過した。"
+
+      # close-superseded も auto-merge と同じ理由で文字列受けとし、同じ値域検証を課す。
+      # 検証しないと 'True' のような誤記が「'true' ではない」＝無効として黙って
+      # 通ってしまう。既定が無効のオプトイン設定では、有効化したつもりで無効のまま
+      # という状態が実行ログ上どこにも現れず、古い PR が溜まり続けても気付けない。
+      # 誤りが「余計に close する」ではなく「静かに何もしない」側へ倒れる分、
+      # target の検証と同じく明示的に落とす価値が高い。
+      - name: Validate close-superseded flags
+        env:
+          SUBMODULE_CLOSE_SUPERSEDED: ${{ inputs.submodule-close-superseded }}
+          SKILLS_CLOSE_SUPERSEDED: ${{ inputs.skills-close-superseded }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 不正時も入力名だけを示し、受け取った値は出さない（target の
+          # 検証と同じ理由）。
+          case "${SUBMODULE_CLOSE_SUPERSEDED}" in
+            true | false)
+              ;;
+            *)
+              echo "::error::submodule-close-superseded の値が不正。'true' / 'false' のいずれかを指定すること。"
+              exit 1
+              ;;
+          esac
+          case "${SKILLS_CLOSE_SUPERSEDED}" in
+            true | false)
+              ;;
+            *)
+              echo "::error::skills-close-superseded の値が不正。'true' / 'false' のいずれかを指定すること。"
+              exit 1
+              ;;
+          esac
+          echo "::notice::close-superseded フラグの値域チェックを通過した。"
 
   # --------------------------------------------------
   # submodule 参照の更新 (Fandhe-AI/actions/submodule-update)
@@ -441,6 +492,131 @@ jobs:
           # 設定ミスで復活させないため）。
           auto-merge-immediate-fallback: 'false'
 
+      - name: Close superseded update PRs
+        # 日次で {prefix}-{YYYYMMDD} の新ブランチを作り直す設計のため、マージされずに
+        # 残った過去日付の PR は常に superseded になる。最新日付の 1 件だけ残して閉じる。
+        #
+        # composite action ではなく本 workflow のジョブステップとして実装している。
+        # composite action は本ファイルから別 SHA で pin されており、action.yml を
+        # 編集しても pin を上げるまで実行内容が変わらない。しかも未知の input は警告
+        # のみで job が緑のまま素通りするため「緑なのに機能しない」状態を作りやすい
+        # （skills-version の注記と同じ理由）。ここに置けば pin と無関係に本体と
+        # 同じコミットで動く。
+        #
+        # always() は先行ステップが失敗しても後片付けを走らせるため。今日の PR 作成が
+        # 失敗した場合でも newest は前日ブランチに解決されて保持されるため、唯一の
+        # 保留中 PR を取り違えて閉じることはない。
+        if: ${{ always() && inputs.submodule-close-superseded == 'true' && steps.detect.outputs.present == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.SUBMODULE_PAT }}
+          TARGET_REPO: ${{ github.repository }}
+          BRANCH_PREFIX: chore/submodule-update
+          BASE_BRANCH: ${{ inputs.base-branch }}
+        # 他ステップと同様、self-hosted / Windows 割り当て時の既定 PowerShell を
+        # 避けるため POSIX シェルを明示する（本スクリプトは herestring `<<<`・
+        # pipefail・算術展開を使うため bash 以外では成立しない）。
+        shell: bash
+        run: |
+          set -euo pipefail
+          # jq はランナーに必ず存在するとは限らない（最小構成の self-hosted ランナーに
+          # 無い可能性は codex-review.yml の注記でも既知）。不在のまま進むと jq の
+          # 実行失敗が `if` 条件の中で握り潰され、newest が空になって「対象なし」の
+          # 早期 exit 0 へ落ちる。つまりステップは緑のまま永久に 1 件も閉じない。
+          # 黙って無効化されるのが最悪なので、先頭で明示的に落とす。
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::error::jq が見つからない。本ステップは jq を必須とするため中止する（ランナーへ jq を導入すること）。"
+            exit 1
+          fi
+          # --limit を明示する。gh の既定は 30 件で、フィルタの母集団は更新 PR だけでなく
+          # （--base で絞った後の）全 open PR のため、既定のままでは古い更新 PR が
+          # ページ外へ落ちて閉じられないまま残る（移行元 agent-reference-skills の欠陥）。
+          # 完全ページネーションにはしない。取りこぼしは下の ::warning で必ず可視化され
+          # 沈黙しないうえ、--base で母集団が「特定 base の open PR」に限定されるため、
+          # 1000 件超は現実的な運用範囲の外にある。上限 + 打ち切り警告のほうが
+          # 無制限ページネーションより API 消費が予測可能である。
+          LIMIT=1000
+          # --base でサーバー側でも base branch を絞る。下の filter にも同じ条件を
+          # 二重に持たせている（意図的）。サーバー側だけに寄せると、fixture が
+          # gh pr list の「出力」を模す以上 base 絞り込みがオフラインで検証不能になり、
+          # テスト済みのガードを未テストのガードへ置き換えることになるため。
+          # サーバー側は転送量とレート消費の削減、filter 側は検証可能性のために置く。
+          prs=$(gh pr list --repo "${TARGET_REPO}" --state open --limit "${LIMIT}" \
+            --base "${BASE_BRANCH}" \
+            --json number,headRefName,isCrossRepository,baseRefName)
+
+          if [ "$(jq 'length' <<<"${prs}")" -ge "${LIMIT}" ]; then
+            echo "::warning::open PR が ${LIMIT} 件に達し一覧が打ち切られた可能性がある。古い更新 PR を取りこぼす場合は LIMIT を引き上げること"
+          fi
+
+          # fork 由来 PR を母集団から除外し (isCrossRepository)、base が BASE_BRANCH に
+          # 一致し、日付部が 8 桁数字に完全一致するブランチだけを対象にする。base を見ないと
+          # 同じ prefix で別 base（release ブランチ等）の PR を誤って close しうるほか、
+          # 別 base の新しい PR に newest を奪われて保持すべき PR が閉じられる。
+          # prefix・base は jq --arg で値渡しし、細工されたブランチ名がフィルタ式へ
+          # 混入しないようにする。
+          # $p / $base は jq の変数（--arg で渡す）であってシェル変数ではないため、
+          # 単一引用符で展開させないのが正しい。SC2016 はこの意図を区別できないので抑制する。
+          # shellcheck disable=SC2016
+          filter='.[] | select(.isCrossRepository | not)
+            | select(.baseRefName == $base)
+            | select(.headRefName | startswith($p) and (.[($p | length):] | test("^[0-9]{8}$")))'
+
+          # YYYYMMDD は辞書順と時系列順が一致するため文字列 sort で最新を選べる。
+          newest=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" \
+            "[${filter} | .headRefName] | sort | last // empty" <<<"${prs}")
+          if [ -z "${newest}" ]; then
+            echo "対象となる更新 PR がないため何もしない"
+            exit 0
+          fi
+
+          # 番号とブランチ名の組で取る（ブランチ削除を close と分離するため）。
+          # 文字列補間 "\(.number)" ではなく @tsv を使う: エスケープ済みの \$newest を
+          # 含む二重引用符シェル文字列の中でさらに補間のエスケープが要る書式になり、
+          # 壊しやすいため。
+          targets=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" --arg newest "${newest}" \
+            "${filter} | select(.headRefName != \$newest) | [.number, .headRefName] | @tsv" <<<"${prs}")
+          if [ -z "${targets}" ]; then
+            echo "最新 (${newest}) のみのため閉じる対象なし"
+            exit 0
+          fi
+
+          msg="より新しい日次更新 PR (branch: ${newest}) が最新 ${BASE_BRANCH} 基準で同内容を再生成しているため close します。"
+
+          # close とブランチ削除は契約の異なる 2 操作なので分離する。--delete-branch に
+          # まとめると両者の失敗が同じ結果へ潰れる。PR を閉じることが本ステップの契約で
+          # あり失敗は fail-closed（最後に exit 1）、ブランチ削除は後片付けなので
+          # best-effort（::warning に留める。削除保護 ruleset で弾かれただけで日次更新を
+          # 赤くするのは割に合わない）。
+          #
+          # ref の DELETE はブランチ名のスラッシュをそのまま解決する（chore/... 形式で
+          # URL エンコード不要。2026-08-17 に本リポジトリの使い捨てブランチで実測。
+          # 存在しない ref への DELETE は HTTP 422 で終了コード 1 を返すことも実測済みで、
+          # 下の if による成否判定が成立する）。
+          failed=0
+          while IFS=$'\t' read -r pr branch; do
+            [ -z "${pr}" ] && continue
+            # PR を閉じることがこのステップの契約。失敗は握り潰さない
+            if gh pr close "${pr}" --repo "${TARGET_REPO}" --comment "${msg}"; then
+              echo "closed #${pr}"
+              # ブランチ削除は best-effort。削除保護 ruleset で弾かれても
+              # PR は閉じており機能の目的は達成されているため、警告に留める
+              if gh api --method DELETE "repos/${TARGET_REPO}/git/refs/heads/${branch}" --silent; then
+                echo "deleted branch ${branch}"
+              else
+                echo "::warning::branch ${branch} の削除に失敗した（削除保護の可能性）。PR #${pr} は閉じている"
+              fi
+            else
+              echo "::error::PR #${pr} の close に失敗した"
+              failed=$((failed + 1))
+            fi
+          done <<<"${targets}"
+
+          if [ "${failed}" -gt 0 ]; then
+            echo "::error::${failed} 件の close に失敗した"
+            exit 1
+          fi
+          exit 0
+
   # --------------------------------------------------
   # Skills の更新 (Fandhe-AI/actions/skills-update)
   # --------------------------------------------------
@@ -563,3 +739,106 @@ jobs:
           # 注記を参照（必須チェックを待たないマージ経路を作らないため）。
           # 呼び出し側で上書きできない固定値とする。
           auto-merge-immediate-fallback: 'false'
+
+      - name: Close superseded update PRs
+        # 目的・composite action ではなくジョブステップに置いた理由・always() の意図は
+        # submodule ジョブ側の同名ステップの注記を参照。本ジョブとの差分は 3 点のみ:
+        # 条件（skills には .gitmodules のような事前判定ステップが無いため detect の
+        # ゲートを持たない）・トークン（PAT 2 種のフォールバック）・BRANCH_PREFIX。
+        if: ${{ always() && inputs.skills-close-superseded == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.SKILLS_PAT || secrets.SUBMODULE_PAT }}
+          TARGET_REPO: ${{ github.repository }}
+          BRANCH_PREFIX: chore/skills-update
+          BASE_BRANCH: ${{ inputs.base-branch }}
+        # POSIX シェルを明示する理由は submodule ジョブ側の注記を参照。
+        shell: bash
+        run: |
+          set -euo pipefail
+          # jq 不在時に「緑のまま 1 件も閉じない」状態へ落ちるのを防ぐ fail-closed。
+          # 詳細は submodule ジョブ側の注記を参照。
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::error::jq が見つからない。本ステップは jq を必須とするため中止する（ランナーへ jq を導入すること）。"
+            exit 1
+          fi
+          # --limit を明示する。gh の既定は 30 件で、フィルタの母集団は更新 PR だけでなく
+          # （--base で絞った後の）全 open PR のため、既定のままでは古い更新 PR が
+          # ページ外へ落ちて閉じられないまま残る（移行元 agent-reference-skills の欠陥）。
+          # 完全ページネーションにはしない。取りこぼしは下の ::warning で必ず可視化され
+          # 沈黙しないうえ、--base で母集団が「特定 base の open PR」に限定されるため、
+          # 1000 件超は現実的な運用範囲の外にある。上限 + 打ち切り警告のほうが
+          # 無制限ページネーションより API 消費が予測可能である。
+          LIMIT=1000
+          # --base でサーバー側でも base branch を絞る。下の filter にも同じ条件を
+          # 二重に持たせている（意図的）。サーバー側だけに寄せると、fixture が
+          # gh pr list の「出力」を模す以上 base 絞り込みがオフラインで検証不能になり、
+          # テスト済みのガードを未テストのガードへ置き換えることになるため。
+          # サーバー側は転送量とレート消費の削減、filter 側は検証可能性のために置く。
+          prs=$(gh pr list --repo "${TARGET_REPO}" --state open --limit "${LIMIT}" \
+            --base "${BASE_BRANCH}" \
+            --json number,headRefName,isCrossRepository,baseRefName)
+
+          if [ "$(jq 'length' <<<"${prs}")" -ge "${LIMIT}" ]; then
+            echo "::warning::open PR が ${LIMIT} 件に達し一覧が打ち切られた可能性がある。古い更新 PR を取りこぼす場合は LIMIT を引き上げること"
+          fi
+
+          # fork 由来 PR を母集団から除外し (isCrossRepository)、base が BASE_BRANCH に
+          # 一致し、日付部が 8 桁数字に完全一致するブランチだけを対象にする。base を見ないと
+          # 同じ prefix で別 base（release ブランチ等）の PR を誤って close しうるほか、
+          # 別 base の新しい PR に newest を奪われて保持すべき PR が閉じられる。
+          # prefix・base は jq --arg で値渡しし、細工されたブランチ名がフィルタ式へ
+          # 混入しないようにする。
+          # $p / $base は jq の変数（--arg で渡す）であってシェル変数ではないため、
+          # 単一引用符で展開させないのが正しい。SC2016 はこの意図を区別できないので抑制する。
+          # shellcheck disable=SC2016
+          filter='.[] | select(.isCrossRepository | not)
+            | select(.baseRefName == $base)
+            | select(.headRefName | startswith($p) and (.[($p | length):] | test("^[0-9]{8}$")))'
+
+          # YYYYMMDD は辞書順と時系列順が一致するため文字列 sort で最新を選べる。
+          newest=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" \
+            "[${filter} | .headRefName] | sort | last // empty" <<<"${prs}")
+          if [ -z "${newest}" ]; then
+            echo "対象となる更新 PR がないため何もしない"
+            exit 0
+          fi
+
+          # 番号とブランチ名の組で取る（ブランチ削除を close と分離するため）。
+          # 文字列補間 "\(.number)" ではなく @tsv を使う: エスケープ済みの \$newest を
+          # 含む二重引用符シェル文字列の中でさらに補間のエスケープが要る書式になり、
+          # 壊しやすいため。
+          targets=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" --arg newest "${newest}" \
+            "${filter} | select(.headRefName != \$newest) | [.number, .headRefName] | @tsv" <<<"${prs}")
+          if [ -z "${targets}" ]; then
+            echo "最新 (${newest}) のみのため閉じる対象なし"
+            exit 0
+          fi
+
+          msg="より新しい日次更新 PR (branch: ${newest}) が最新 ${BASE_BRANCH} 基準で同内容を再生成しているため close します。"
+
+          # close は fail-closed・ブランチ削除は best-effort と分ける理由、および
+          # ref DELETE がスラッシュを素通しする実測記録は submodule ジョブ側の注記を参照。
+          failed=0
+          while IFS=$'\t' read -r pr branch; do
+            [ -z "${pr}" ] && continue
+            # PR を閉じることがこのステップの契約。失敗は握り潰さない
+            if gh pr close "${pr}" --repo "${TARGET_REPO}" --comment "${msg}"; then
+              echo "closed #${pr}"
+              # ブランチ削除は best-effort。削除保護 ruleset で弾かれても
+              # PR は閉じており機能の目的は達成されているため、警告に留める
+              if gh api --method DELETE "repos/${TARGET_REPO}/git/refs/heads/${branch}" --silent; then
+                echo "deleted branch ${branch}"
+              else
+                echo "::warning::branch ${branch} の削除に失敗した（削除保護の可能性）。PR #${pr} は閉じている"
+              fi
+            else
+              echo "::error::PR #${pr} の close に失敗した"
+              failed=$((failed + 1))
+            fi
+          done <<<"${targets}"
+
+          if [ "${failed}" -gt 0 ]; then
+            echo "::error::${failed} 件の close に失敗した"
+            exit 1
+          fi
+          exit 0

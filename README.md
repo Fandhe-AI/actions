@@ -17,7 +17,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | [codex-review](codex-review/) | OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
 | [rust-base-ci](rust-base-ci/) | Rust のベースライン品質ゲート（`cargo fmt` / `clippy` / `test` / `deny`。reusable workflow。runner は inputs で指定、`Cargo.toml` 不在時は安全に skip） |
 | [pages-deploy](pages-deploy/) | GitHub Pages への deploy（reusable workflow。呼び出し側 build ジョブの dist を artifact で受け取り、Pages artifact 変換〜deploy まで担う） |
-| [update-external](update-external/) | 外部ソース（submodule 参照 / エージェントスキル）の定期更新（reusable workflow。PAT 未設定時は fail-closed、runner・submodule 更新の要否・auto-merge は呼び出し元指定。下流は wrapper 1 ファイルのみ持つ） |
+| [update-external](update-external/) | 外部ソース（submodule 参照 / エージェントスキル）の定期更新（reusable workflow。PAT 未設定時は fail-closed、runner・submodule 更新の要否・auto-merge は呼び出し元指定。古い日次更新 PR の自動 close はオプトイン。下流は wrapper 1 ファイルのみ持つ） |
 | [lint-docs](lint-docs/) | ドキュメント／設定ファイル系 lint（reusable workflow。markdownlint・editorconfig-checker・yamllint・commitlint を個別に切替可能、reviewdog 対応は opt-in、runner は呼び出し元指定。required status check 向けの集約ジョブ `lint-docs-complete` 付き） |
 
 ## ドキュメント
