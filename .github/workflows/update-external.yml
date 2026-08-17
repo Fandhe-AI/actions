@@ -1,7 +1,54 @@
-name: Update external sources
+name: Update external sources (reusable)
 
+# 外部ソース（submodule 参照 / エージェントスキル）の定期更新を束ねた reusable workflow。
+# Fandhe-AI/agent-cli-skills の update-external.yml で構築・強化した内容（同リポジトリの
+# イシュー #244 / #247 / #250 / #251）を workflow_call 化して移設したもの。
+# 呼び出し側リポジトリは SHA 固定の薄い wrapper から使う:
+#
+#   jobs:
+#     update-external:
+#       uses: Fandhe-AI/actions/.github/workflows/update-external.yml@<SHA> # main
+#       secrets:
+#         SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+#         SKILLS_PAT: ${{ secrets.SKILLS_PAT }}
+#
+# 導入手順と wrapper テンプレートは update-external/README.md を参照。
+#
 # --------------------------------------------------------------------------
-# 外部 action の SHA 検証記録（検証日: 2026-08-16）
+# なぜ reusable workflow 化したか（agent-cli-skills イシュー #259）
+# --------------------------------------------------------------------------
+# skills-update が下流へ配布するのは `.agents/skills/**` と `skills-lock.json` だけで、
+# `.github/workflows/**` は配布対象外である。そのため本ファイルの強化を下流 21 リポへ
+# 届ける手段が「全リポへの手 push」しか無く、実際に各リポのテンプレートが乖離した
+# （2026-08-16 実測で persist-credentials: false は 22 リポ中 4 リポのみ、
+# auto-merge-immediate-fallback の fail-open が 19 リポ）。
+#
+# reusable 化すると下流が持つのは wrapper 1 ファイルだけになり、強化はこのファイルの
+# 更新だけで全リポへ届く（wrapper の pin SHA 更新は別途必要。README の「pin SHA の
+# 更新」節を参照）。
+#
+# --------------------------------------------------------------------------
+# 呼び出し側の差分をどこで吸収するか
+# --------------------------------------------------------------------------
+# 下流には正当なリポ固有差分が実在するため、全置換ではなく input で吸収する:
+#
+# - runner: rust-ai-library は public 化に伴い ubuntu-latest、yadori は self-hosted。
+#   → `runner-json` input（呼び出し側で vars.UPDATE_EXTERNAL_RUNNER を解決して渡す）
+# - submodule ジョブの要否: yadori は .gitmodules を持つが submodule 更新は行わない
+#   （pin 固定運用）。`.gitmodules` の有無による自動 skip だけでは
+#   「ファイルはあるが更新したくない」を表現できない。
+#   → `enable-submodule` input
+# - auto-merge の ON/OFF と allowlist: 組織変数で集中管理している。
+#   → `submodule-auto-merge` / `skills-auto-merge` ほかの input
+#
+# vars コンテキストは called workflow 内でも呼び出し側リポジトリ／組織の変数へ解決される
+# （GitHub Docs「Reusing workflow configurations」）が、本ファイルは vars を一切参照せず
+# すべて input で受け取る。auto-merge の ON/OFF はマージ可否を左右する設定であり、
+# 実効値が呼び出し側のファイルを読むだけで確定することを優先した（コンテキスト解決の
+# 仕様変更に依存させない）。
+#
+# --------------------------------------------------------------------------
+# 外部 action の SHA 検証記録（検証日: 2026-08-16、移設時に再確認）
 # --------------------------------------------------------------------------
 # 本ファイルで uses に指定した全 SHA について、正規のリリースタグ / 正当な
 # upstream コミットと一致することを GitHub API で実測確認した。検証方法と結果:
@@ -19,8 +66,10 @@ name: Update external sources
 #
 #   Fandhe-AI/actions@fed9c07d98367f77e5e2b63bca38843f46feee96
 #     `GET /repos/Fandhe-AI/actions/compare/fed9c07...main` → status "ahead",
-#     ahead_by=7, behind_by=0。すなわち fed9c07 は main の祖先であり、
-#     main は 7 コミット先行。タグ未公開のため main 追従の SHA pin となる。
+#     ahead_by=7, behind_by=0。すなわち fed9c07 は main の祖先。タグ未公開のため
+#     main 追従の SHA pin となる。本ファイルは同一リポジトリ内にあるが、composite
+#     action の参照は移設元と同じく SHA 固定のままとする（reusable workflow 本体の
+#     更新と composite action の更新タイミングを分離するため）。
 #
 # 上記 2 つの actions/* はブランチ追従ではなくリリースタグ pin であるため、
 # uses 行末の注記は追従元タグ（`# v6.0.3` / `# v6.4.0`）とする。ここへ `# main` と
@@ -29,26 +78,85 @@ name: Update external sources
 # --------------------------------------------------------------------------
 
 on:
-  schedule:
-    - cron: '0 0 * * *'   # 00:00 UTC = 09:00 JST
-  workflow_dispatch:
+  workflow_call:
     inputs:
       target:
-        description: '更新対象 (手動実行時のみ有効。schedule は常に all)'
-        type: choice
+        description: >
+          更新対象。all / submodule / skill のいずれか。呼び出し側の schedule 起動では
+          all を渡す。未知の値を渡すと両ジョブとも skip される（wrapper 側の
+          workflow_dispatch input を choice 型にして値域を固定すること）。
+        type: string
         required: false
         default: all
-        options:
-          - all
-          - submodule
-          - skill
+      runner-json:
+        description: >
+          runs-on へ渡す JSON リテラル。単一ラベルは "ubuntu-latest" のように前後の
+          二重引用符ごと、複数ラベルは ["self-hosted","Linux"] と指定する。素の
+          self-hosted（引用符なし）は JSON として不正で fromJSON が失敗し workflow
+          全体が起動しなくなる。複数ラベルを推奨する理由は、単一の self-hosted ラベルが
+          OS を限定せず Windows ランナーへ割り当てられうるため（後続 run が既定の
+          PowerShell で実行され、POSIX シェル構文と composite action の bash 前提が壊れる）。
+        type: string
+        required: false
+        default: '"ubuntu-latest"'
+      base-branch:
+        description: >
+          更新対象ブランチ。checkout の ref・.gitmodules の存在判定・composite action の
+          base-branch すべてに同じ値を使う（判定対象と更新対象がずれると誤 skip / 誤実行になる）。
+        type: string
+        required: false
+        default: main
+      enable-submodule:
+        description: >
+          submodule 更新ジョブを有効にするか。.gitmodules を持つが pin 固定運用のため
+          自動更新したくないリポジトリは false を渡す（.gitmodules の有無による自動 skip
+          だけでは「ファイルはあるが更新しない」を表現できないため）。
+        type: boolean
+        required: false
+        default: true
+      enable-skills:
+        description: 'エージェントスキル更新ジョブを有効にするか'
+        type: boolean
+        required: false
+        default: true
+      submodule-auto-merge:
+        description: >
+          submodule 更新 PR の auto-merge を有効にするか（'true' / 'false' の文字列）。
+          composite action 側は未設定 (null/空) を有効と解釈する非対称設計のため、
+          呼び出し側で vars を解決したうえで明示的な文字列を渡す。
+        type: string
+        required: false
+        default: 'false'
+      submodule-auto-merge-allowlist:
+        description: 'submodule 更新 PR の auto-merge を許可する対象の allowlist'
+        type: string
+        required: false
+        default: ''
+      skills-auto-merge:
+        description: 'スキル更新 PR の auto-merge を有効にするか（true / false の文字列）'
+        type: string
+        required: false
+        default: 'false'
+      skills-auto-merge-allowlist:
+        description: 'スキル更新 PR の auto-merge を許可する対象の allowlist'
+        type: string
+        required: false
+        default: ''
+    secrets:
+      SUBMODULE_PAT:
+        description: >
+          submodule の fetch・push・PR 作成に使う書き込み権限付き PAT。
+          SKILLS_PAT 未設定時はスキル更新ジョブでも流用する。
+        required: false
+      SKILLS_PAT:
+        description: 'スキル更新の push・PR 作成に使う書き込み権限付き PAT（未設定時は SUBMODULE_PAT を流用）'
+        required: false
 
-permissions:
-  contents: read
+# secrets: inherit ではなく上記 2 種を明示宣言している。本 workflow は public リポジトリに
+# 置かれ、書き込み権限付き PAT を扱うため、渡される資格情報の面を列挙して固定する。
 
-concurrency:
-  group: update-external
-  cancel-in-progress: false
+# 注意: reusable workflow のトップレベル concurrency は機能しないため、呼び出し側 wrapper で
+# `concurrency: { group: update-external, cancel-in-progress: false }` を設定すること。
 
 jobs:
   # --------------------------------------------------
@@ -60,25 +168,18 @@ jobs:
   # 「更新対象が無ければ何もしない」契約はここで担保される。
   # 一方、既に submodule を持つリポジトリ（docs / spec を特定コミットへ
   # pin 固定している構成など）では、日次の submodule 自動更新が pin 運用と
-  # 衝突しうる。本テンプレートを採用する際は当該リポジトリの submodule 運用
-  # ポリシーを必ず確認し、pin 固定運用なら本ジョブを無効化するか
-  # workflow_dispatch 限定へ変更すること。
+  # 衝突しうる。そうしたリポジトリは enable-submodule: false を渡してジョブごと
+  # 無効化する（存在判定では区別できないため）。
   submodule:
     name: Update submodule references
-    if: ${{ github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "submodule"]'), inputs.target) }}
-    # runner はこのリポジトリの可視性に基づき固定する（docs/runner-policy.md
-    # 「1. 方針」: public = GitHub ホステッド、self-hosted は codex-review の
-    # codex ジョブのみの例外。docs/runner-policy.md「2. 対象リポジトリ一覧」の
-    # public 節に本リポジトリ自身 `actions` が明記されている）。
-    #
-    # 本ファイルは `workflow_call` を持たず、他リポジトリへ配布される reusable
-    # workflow ではなく、Fandhe-AI/actions 自身（public リポジトリ）を対象に
-    # 動く運用 workflow である。したがって「消費側リポジトリごとに可視性が
-    # 異なる」ケースは存在せず、変数で runner を切り替える仕組みは不要。
-    # 本リポジトリの規約どおり ubuntu-latest に固定する
-    # （self-hosted へ切り替え可能にすると public workflow から self-hosted
-    # runner を選べる状態になり、runner 方針の例外を無告知に拡大してしまう）。
-    runs-on: ubuntu-latest
+    if: ${{ inputs.enable-submodule && contains(fromJSON('["all", "submodule"]'), inputs.target) }}
+    # 実行ランナーは呼び出し側が runner-json で指定する。値の書式は input の
+    # description を参照（必ず JSON リテラル）。`||` を fromJSON の外（文字列側）へ
+    # 置く設計を移設元から引き継いでいる: 配列値の真偽判定は GitHub Actions 式仕様として
+    # 明文化されておらず、`X && fromJSON(X) || 'ubuntu-latest'` 形式だと self-hosted 指定が
+    # 黙って ubuntu-latest へフォールバックする（fail-open する）恐れがあるため、
+    # 既定値は input 側の default で与え、ここでは fromJSON のみを行う。
+    runs-on: ${{ fromJSON(inputs.runner-json) }}
     # 外部取得・submodule 更新・PR 作成の実処理量に見合う上限。ネットワーク
     # ハングやリモート応答待ちでランナーを占有し続けるのを防ぐ。
     timeout-minutes: 10
@@ -104,26 +205,31 @@ jobs:
       # GITHUB_TOKEN フォールバック」であり、本ステップはそれに当たらない。
       # .gitmodules が存在する場合は従来どおり PAT 必須のまま。
       #
-      # ref=main は下の Checkout の `ref:` および submodule-update の base-branch と
-      # 一致させること（判定対象と更新対象がずれると誤 skip / 誤実行になる）。
+      # github コンテキストは reusable workflow 内でも常に呼び出し側に紐づくため、
+      # github.repository は呼び出し側リポジトリを指す（GitHub Docs）。
       - name: Detect .gitmodules
         id: detect
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        # AGENTS.md の bash 実装規約により、run は shell: bash 明示 +
-        # set -euo pipefail を runner 種別によらず必須とする。
+          BASE_BRANCH: ${{ inputs.base-branch }}
+        # 他ステップと同様、self-hosted / Windows 割り当て時の既定 PowerShell を
+        # 避けるため POSIX シェルを明示する。
         shell: bash
         run: |
           set -euo pipefail
+          # ブランチ名は URL パスへ埋め込むため、クエリ文字列として安全になるよう
+          # --data-urlencode に相当する形で渡す。release/1.0 のような / を含む名前でも
+          # ref パラメータとして正しく解釈させる。
           # gh api は HTTP エラーを一律 exit 1 に潰すため、404（対象なし）と
           # 通信・権限エラーを区別できない。HTTP status を直接取る curl を使う。
           curl_status=0
-          http_code=$(curl -sS -o /dev/null -w '%{http_code}' \
+          http_code=$(curl -sS -o /dev/null -w '%{http_code}' -G \
+            --data-urlencode "ref=${BASE_BRANCH}" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL}/repos/${REPO}/contents/.gitmodules?ref=main") || curl_status=$?
+            "${GITHUB_API_URL}/repos/${REPO}/contents/.gitmodules") || curl_status=$?
           if [ "${curl_status}" -ne 0 ]; then
             echo "::error::.gitmodules の存在確認に失敗（curl 終了コード ${curl_status}）。"
             exit 1
@@ -137,10 +243,10 @@ jobs:
               echo "::notice::.gitmodules を検出。submodule 更新を実行する。"
               ;;
             404)
-              # 404 は「.gitmodules が無い」と「ref main 自体が存在しない」の
-              # 両方で返る。後者を no-op と誤読すると、既定ブランチが main では
-              # ないリポジトリで更新が黙って止まる（従来は checkout が
-              # `couldn't find remote ref main` で明示的に失敗していた）。
+              # 404 は「.gitmodules が無い」と「ref 自体が存在しない」の
+              # 両方で返る。後者を no-op と誤読すると、既定ブランチが base-branch と
+              # 異なるリポジトリで更新が黙って止まる（従来は checkout が
+              # `couldn't find remote ref` で明示的に失敗していた）。
               # 応答本文の文字列照合は脆いため、ref の解決可否を別途問い合わせて
               # 判別し、解決できない場合は skip せず失敗させる。
               ref_status=0
@@ -148,9 +254,9 @@ jobs:
                 -H "Authorization: Bearer ${GH_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
-                "${GITHUB_API_URL}/repos/${REPO}/commits/main") || ref_status=$?
+                "${GITHUB_API_URL}/repos/${REPO}/commits/${BASE_BRANCH}") || ref_status=$?
               if [ "${ref_status}" -ne 0 ] || [ "${ref_code}" != "200" ]; then
-                echo "::error::ref main を解決できない（curl ${ref_status} / HTTP ${ref_code}）。"
+                echo "::error::ref ${BASE_BRANCH} を解決できない（curl ${ref_status} / HTTP ${ref_code}）。"
                 exit 1
               fi
               echo "present=false" >> "${GITHUB_OUTPUT}"
@@ -170,16 +276,19 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         env:
           PAT: ${{ secrets.SUBMODULE_PAT }}
-        # AGENTS.md の bash 実装規約により shell: bash を明示する
-        # （呼び出す composite action も bash 前提）。
+        # self-hosted ランナー（特に Windows 割り当て時）の既定シェルは
+        # PowerShell であり、下記の POSIX シェル構文が解釈できない。
+        # 呼び出す composite action も bash 前提のため明示的に固定する。
         shell: bash
         run: |
           set -euo pipefail
           if [ -z "${PAT}" ]; then
-            msg="SUBMODULE_PAT が未設定。GITHUB_TOKEN へのフォールバックは廃止済み"
+            msg="SUBMODULE_PAT が未設定（wrapper の secrets: で渡されていない可能性）。"
+            msg="${msg}GITHUB_TOKEN へのフォールバックは廃止済み"
             msg="${msg}（bot 作成 PR が pull_request workflow を発火させず"
             msg="${msg}必須チェック未実行で恒久 BLOCKED になるため。PR #176 の実障害）。"
-            msg="${msg}リポジトリ or org の Secrets に SUBMODULE_PAT を登録すること。"
+            msg="${msg}リポジトリ or org の Secrets に SUBMODULE_PAT を登録し、"
+            msg="${msg}wrapper の secrets: で本 workflow へ渡すこと。"
             echo "::error::${msg}"
             exit 1
           fi
@@ -189,10 +298,10 @@ jobs:
         # actions/checkout v6.0.3（リリースタグ pin。SHA 検証記録はファイル冒頭）
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          # base-branch が main 固定のため、workflow_dispatch で非 main ブランチから
-          # 起動された場合でも常に main を checkout し、他ブランチのツリー混入を防ぐ。
-          # 上の Detect .gitmodules の ref=main と一致させること。
-          ref: main
+          # base-branch 固定のため、workflow_dispatch で非既定ブランチから
+          # 起動された場合でも常に同じブランチを checkout し、他ブランチのツリー混入を防ぐ。
+          # 上の Detect .gitmodules の ref と一致させること。
+          ref: ${{ inputs.base-branch }}
           submodules: recursive
           fetch-depth: 0
           token: ${{ secrets.SUBMODULE_PAT }}
@@ -205,16 +314,25 @@ jobs:
         uses: Fandhe-AI/actions/submodule-update@fed9c07d98367f77e5e2b63bca38843f46feee96 # main
         with:
           token: ${{ secrets.SUBMODULE_PAT }}
-          base-branch: main
+          base-branch: ${{ inputs.base-branch }}
           branch-prefix: chore/submodule-update
           commit-message: 'chore: submodule を最新に更新'
           pr-title: 'chore: submodule を最新に更新'
           pr-labels: 'dependencies,automated'
-          # auto-merge の ON/OFF。未設定 (null/空) を有効と解釈する非対称設計のため、
-          # 未設定時は明示的に 'false' へフォールバックしオプトイン運用とする。
-          auto-merge: ${{ vars.SUBMODULE_AUTO_MERGE || 'false' }}
-          auto-merge-allowlist: ${{ vars.SUBMODULE_AUTO_MERGE_ALLOWLIST }}
+          # auto-merge の ON/OFF。composite action 側は未設定 (null/空) を有効と解釈する
+          # 非対称設計のため、呼び出し側で vars を解決した明示的な文字列を受け取り、
+          # ここでそのまま渡す（オプトイン運用）。
+          auto-merge: ${{ inputs.submodule-auto-merge }}
+          auto-merge-allowlist: ${{ inputs.submodule-auto-merge-allowlist }}
           auto-merge-strategy: squash
+          # action 側の既定は 'true'。その場合、リポジトリの Allow auto-merge が
+          # 無効などで `gh pr merge --auto` が失敗すると、必須チェックの完了を待たず
+          # 即時マージへフォールバックする。安全性を branch protection が常に正しく
+          # 設定されていることだけに依存させる fail-open な構成になるため明示的に
+          # 無効化する（auto-merge が使えない環境では、マージせず人間へ委ねる）。
+          # これは呼び出し側で上書きできない固定値とする（fail-open を各リポジトリの
+          # 設定ミスで復活させないため）。
+          auto-merge-immediate-fallback: 'false'
 
   # --------------------------------------------------
   # Skills の更新 (Fandhe-AI/actions/skills-update)
@@ -230,17 +348,15 @@ jobs:
   # 対称性より「黙って止まらないこと」を優先し、本ジョブは PAT 必須のままとする。
   skills:
     name: Update agent skills
-    if: ${{ github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "skill"]'), inputs.target) }}
-    # runner の固定理由は submodule ジョブ側の注記を参照（docs/runner-policy.md
-    # 「1. 方針」に基づき、public リポジトリである本リポジトリ自身が対象の
-    # 運用 workflow であるため ubuntu-latest に固定する）。
-    runs-on: ubuntu-latest
+    if: ${{ inputs.enable-skills && contains(fromJSON('["all", "skill"]'), inputs.target) }}
+    # 実行ランナーは呼び出し側が runner-json で指定する。書式は input の description を参照。
+    runs-on: ${{ fromJSON(inputs.runner-json) }}
     # npx skills のダウンロード・全スキル更新・PR 作成の実処理量に見合う上限。
     # submodule ジョブより取得対象が多いため長めに取る。
     timeout-minutes: 15
     # 最小権限。理由は submodule ジョブ側の注記を参照（書き込みは PAT のみで行い、
     # GITHUB_TOKEN に write を与えると PAT の fail-closed ガードを迂回できる経路が
-    # 増えるため）。read が要るのは先頭の存在判定ステップだけ。
+    # 増えるため）。
     permissions:
       contents: read
     steps:
@@ -250,17 +366,19 @@ jobs:
       - name: Verify PAT is configured
         env:
           PAT: ${{ secrets.SKILLS_PAT || secrets.SUBMODULE_PAT }}
-        # AGENTS.md の bash 実装規約により shell: bash を明示する
-        # （呼び出す composite action も bash 前提）。
+        # self-hosted ランナー（特に Windows 割り当て時）の既定シェルは
+        # PowerShell であり、下記の POSIX シェル構文が解釈できない。
+        # 呼び出す composite action も bash 前提のため明示的に固定する。
         shell: bash
         run: |
           set -euo pipefail
           if [ -z "${PAT}" ]; then
-            msg="SKILLS_PAT / SUBMODULE_PAT がいずれも未設定。GITHUB_TOKEN への"
+            msg="SKILLS_PAT / SUBMODULE_PAT がいずれも未設定（wrapper の secrets: で"
+            msg="${msg}渡されていない可能性）。GITHUB_TOKEN への"
             msg="${msg}フォールバックは廃止済み（bot 作成 PR が pull_request"
             msg="${msg} workflow を発火させず必須チェック未実行で恒久 BLOCKED に"
             msg="${msg}なるため。PR #176 の実障害）。リポジトリ or org の Secrets に"
-            msg="${msg} SKILLS_PAT を登録すること。"
+            msg="${msg} SKILLS_PAT を登録し、wrapper の secrets: で渡すこと。"
             echo "::error::${msg}"
             exit 1
           fi
@@ -273,22 +391,36 @@ jobs:
         # フォールバック連鎖は PAT 2 種で打ち止めとし、未設定なら上記ガードで落とす。
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          # base-branch が main 固定のため、workflow_dispatch で非 main ブランチから
-          # 起動された場合でも常に main を checkout し、他ブランチのツリー混入を防ぐ。
-          ref: main
+          # base-branch 固定の理由は submodule ジョブ側の注記を参照。
+          ref: ${{ inputs.base-branch }}
           fetch-depth: 0
           token: ${{ secrets.SKILLS_PAT || secrets.SUBMODULE_PAT }}
+          # 既定の true は書き込み PAT を .git/config の資格情報として残すため、
+          # 後続で走る外部 npm パッケージ (`npx skills`) とその依存が本リポへの
+          # push 権限を握れてしまう。skills-update は push 前に origin を自前の
+          # AUTH_URL へ張り替える実装（pin 先 action.yml の Commit and push branch
+          # ステップで実測確認）なので、資格情報を残さなくても push は成立する。
+          # submodule ジョブ側は private submodule の fetch に checkout の資格情報を
+          # 使うため既定のままとする（対称化しないこと）。
+          persist-credentials: false
 
       - name: Setup Node.js
         # actions/setup-node v6.4.0（リリースタグ pin。SHA 検証記録はファイル冒頭）
         # skills-update が使う npx skills のため node を固定する。
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          # メジャー指定 '20' は解決先パッチ版が日々変動し再現性がないため、
-          # 実在するパッチ版へ固定する。20.20.2 は Node.js 20 系 (LTS Iron) の
-          # 最新パッチであり、actions/node-versions の versions-manifest.json に
-          # 収録済みで setup-node が解決可能であることを実測確認済み（2026-08-16）。
-          node-version: '20.20.2'
+          # メジャー指定は解決先パッチ版が日々変動し再現性がないため、実在する
+          # パッチ版へ固定する。24.19.0 は Node.js 24 系 (LTS Krypton) の最新パッチ
+          # （nodejs.org/dist/index.json で 2026-08-03 リリースを実測確認、2026-08-16）。
+          #
+          # 20 系 (Iron) は 2026-08-16 時点で EOL に達しておりセキュリティ修正を
+          # 受けられない。外部パッケージを取得・実行し書き込み権限付き PAT で PR を
+          # 作成する定期ジョブで EOL ランタイムを使わないため、サポート中の LTS へ
+          # 更新した。メジャー更新時は EOL 到達前に同様の更新を行うこと。
+          #
+          # 呼び出し側で上書きできない固定値とする。ランタイムのサポート状況は
+          # リポジトリ固有の事情ではなく、集中管理して一斉に上げるべき項目のため。
+          node-version: '24.19.0'
 
       - name: Update skills and open PR
         # Fandhe-AI/actions はタグ未公開のため main 追従の最新コミット SHA に固定
@@ -297,20 +429,29 @@ jobs:
         uses: Fandhe-AI/actions/skills-update@fed9c07d98367f77e5e2b63bca38843f46feee96 # main
         with:
           token: ${{ secrets.SKILLS_PAT || secrets.SUBMODULE_PAT }}
-          base-branch: main
+          # source-token 省略時は token（書き込み PAT）が流用され、`npx skills` 実行
+          # 環境の GH_TOKEN / GITHUB_TOKEN と git の insteadOf 設定へ注入される。
+          # スキルソースは全て public のため取得に書き込み権限は不要で、read-only の
+          # github.token を明示して資格情報の境界を絞る。private ソースを増やす場合は
+          # ここを専用の read-only PAT に差し替えること。
+          source-token: ${{ github.token }}
+          base-branch: ${{ inputs.base-branch }}
           branch-prefix: chore/skills-update
           commit-message: 'chore: エージェントスキルを最新に更新'
           pr-title: 'chore: エージェントスキルを最新に更新'
           pr-labels: 'dependencies,automated'
           # skills CLI のバージョン固定。latest 追従だと上流リリースで挙動が
           # 無告知に変わるため明示する。1.5.22 は固定時点の npm latest と同一
-          # （`npm view skills version` → 1.5.22 を 2026-08-16 に実測）であり、
-          # 本変更は挙動を変えずに「固定」だけを行う意図である。
+          # （`npm view skills version` → 1.5.22 を 2026-08-16 に実測）。
           # input 名は pin 先 SHA の action.yml で実在確認済み（未知の input は
           # 警告のみで job が緑のまま素通りし固定が無効化されるため要検証）。
+          # node-version と同じく集中管理項目とし、呼び出し側では上書きさせない。
           skills-version: '1.5.22'
-          # auto-merge の ON/OFF。未設定 (null/空) を有効と解釈する非対称設計のため、
-          # 未設定時は明示的に 'false' へフォールバックしオプトイン運用とする。
-          auto-merge: ${{ vars.SKILLS_AUTO_MERGE || 'false' }}
-          auto-merge-allowlist: ${{ vars.SKILLS_AUTO_MERGE_ALLOWLIST }}
+          # auto-merge の ON/OFF。理由は submodule ジョブ側の注記を参照。
+          auto-merge: ${{ inputs.skills-auto-merge }}
+          auto-merge-allowlist: ${{ inputs.skills-auto-merge-allowlist }}
           auto-merge-strategy: squash
+          # 即時マージへのフォールバックを無効化する理由は submodule ジョブ側の
+          # 注記を参照（必須チェックを待たないマージ経路を作らないため）。
+          # 呼び出し側で上書きできない固定値とする。
+          auto-merge-immediate-fallback: 'false'

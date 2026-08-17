@@ -1,0 +1,76 @@
+# 外部ソース定期更新（submodule 参照 / エージェントスキル）の wrapper テンプレート。
+# 呼び出し側リポジトリの .github/workflows/update-external.yml へコピーし、<SHA> を
+# Fandhe-AI/actions のコミット SHA へ差し替える。導入手順は Fandhe-AI/actions の
+# update-external/README.md「セットアップ」を参照。
+#
+# 実装本体・fail-closed ガードの設計コメントは Fandhe-AI/actions の
+# .github/workflows/update-external.yml を参照。本ファイルはリポジトリ固有の設定
+# （runner・submodule 更新の要否・auto-merge）だけを持つ。
+name: Update external sources
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 00:00 UTC = 09:00 JST
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '更新対象 (手動実行時のみ有効。schedule は常に all)'
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - submodule
+          - skill
+
+permissions:
+  contents: read
+
+# reusable workflow のトップレベル concurrency は機能しないため呼び出し側で設定する
+concurrency:
+  group: update-external
+  cancel-in-progress: false
+
+jobs:
+  update-external:
+    # <SHA> は Fandhe-AI/actions のコミット SHA で固定する（@main 不可）
+    uses: Fandhe-AI/actions/.github/workflows/update-external.yml@<SHA> # main
+    permissions:
+      contents: read
+    with:
+      # schedule 起動では inputs が null になるため all へフォールバックする
+      target: ${{ inputs.target || 'all' }}
+
+      # ------------------------------------------------------------------
+      # ここから下がリポジトリ固有の設定。既定で問題なければ行ごと削除してよい
+      # ------------------------------------------------------------------
+
+      # runs-on へ渡す JSON リテラル。必ず前後の二重引用符ごと書く。
+      #   GitHub ホステッド（public リポジトリの既定）: '"ubuntu-latest"'
+      #   self-hosted（private リポジトリ）           : '["self-hosted","Linux"]'
+      # 素の self-hosted（引用符なし）は JSON として不正で workflow が起動しなくなる。
+      # 単一の self-hosted ラベルは OS を限定しないため、OS ラベルの併記を推奨する
+      # （Windows ランナーへ割り当てられると POSIX シェル前提の run が壊れる）。
+      runner-json: '"ubuntu-latest"'
+
+      # submodule 更新ジョブの要否。.gitmodules を持たないリポジトリは true のままで
+      # よい（存在判定ステップが自動で skip する）。.gitmodules を持つが特定コミットへ
+      # pin 固定していて自動更新したくないリポジトリだけ false にする。
+      # enable-submodule: false
+
+      # スキル更新ジョブの要否。.agents/skills を持たないリポジトリは false にする。
+      # enable-skills: false
+
+      # auto-merge はマージ可否を左右する設定のため、組織変数を呼び出し側で解決して
+      # 渡す（実効値が本ファイルを読むだけで確定するようにするため）。composite action
+      # 側は未設定 (null/空) を有効と解釈する非対称設計なので、明示的に 'false' へ
+      # フォールバックしてオプトイン運用にする。
+      submodule-auto-merge: ${{ vars.SUBMODULE_AUTO_MERGE || 'false' }}
+      submodule-auto-merge-allowlist: ${{ vars.SUBMODULE_AUTO_MERGE_ALLOWLIST }}
+      skills-auto-merge: ${{ vars.SKILLS_AUTO_MERGE || 'false' }}
+      skills-auto-merge-allowlist: ${{ vars.SKILLS_AUTO_MERGE_ALLOWLIST }}
+    secrets:
+      # 未登録のシークレット参照は空文字になり、reusable workflow 側の fail-closed
+      # ガードがジョブを失敗させる（黙って GITHUB_TOKEN へフォールバックしない）。
+      SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+      SKILLS_PAT: ${{ secrets.SKILLS_PAT }}
