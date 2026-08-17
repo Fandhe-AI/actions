@@ -72,8 +72,10 @@ jobs:
 
       # 古い日次更新 PR（{prefix}-{YYYYMMDD} の最新日付ブランチ以外）を close するか。
       # 既定は無効。有効にした場合のみ、更新ステップの後に最新 1 件を残して残りを
-      # close + ブランチ削除する（fork 由来 PR は対象外）。マージされずに溜まった
-      # 過去日付の PR を掃除したいリポジトリだけ 'true' にする。
+      # close + ブランチ削除する（fork 由来 PR と base-branch 以外を base とする
+      # PR は対象外）。マージされずに溜まった過去日付の PR を掃除したいリポジトリ
+      # だけ 'true' にする。close の失敗はジョブを失敗させ、ブランチ削除の失敗は
+      # 警告に留まる。
       # 詳細は Fandhe-AI/actions の update-external/README.md を参照。
       # submodule-close-superseded: 'true'
       # skills-close-superseded: 'true'

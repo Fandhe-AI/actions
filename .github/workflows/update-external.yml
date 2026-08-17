@@ -528,34 +528,53 @@ jobs:
             exit 1
           fi
           # --limit を明示する。gh の既定は 30 件で、フィルタの母集団は更新 PR だけでなく
-          # 全 open PR のため、PR 番号が 4 桁に達しているリポジトリでは古い更新 PR が
+          # （--base で絞った後の）全 open PR のため、既定のままでは古い更新 PR が
           # ページ外へ落ちて閉じられないまま残る（移行元 agent-reference-skills の欠陥）。
-          LIMIT=300
+          # 完全ページネーションにはしない。取りこぼしは下の ::warning で必ず可視化され
+          # 沈黙しないうえ、--base で母集団が「特定 base の open PR」に限定されるため、
+          # 1000 件超は現実的な運用範囲の外にある。上限 + 打ち切り警告のほうが
+          # 無制限ページネーションより API 消費が予測可能である。
+          LIMIT=1000
+          # --base でサーバー側でも base branch を絞る。下の filter にも同じ条件を
+          # 二重に持たせている（意図的）。サーバー側だけに寄せると、fixture が
+          # gh pr list の「出力」を模す以上 base 絞り込みがオフラインで検証不能になり、
+          # テスト済みのガードを未テストのガードへ置き換えることになるため。
+          # サーバー側は転送量とレート消費の削減、filter 側は検証可能性のために置く。
           prs=$(gh pr list --repo "${TARGET_REPO}" --state open --limit "${LIMIT}" \
-            --json number,headRefName,isCrossRepository)
+            --base "${BASE_BRANCH}" \
+            --json number,headRefName,isCrossRepository,baseRefName)
 
           if [ "$(jq 'length' <<<"${prs}")" -ge "${LIMIT}" ]; then
             echo "::warning::open PR が ${LIMIT} 件に達し一覧が打ち切られた可能性がある。古い更新 PR を取りこぼす場合は LIMIT を引き上げること"
           fi
 
-          # fork 由来 PR を母集団から除外し (isCrossRepository)、日付部が 8 桁数字に完全一致
-          # するブランチだけを対象にする。prefix は jq --arg で値渡しし、細工されたブランチ名が
-          # フィルタ式へ混入しないようにする。
-          # $p は jq の変数（--arg で渡す）であってシェル変数ではないため、単一引用符で
-          # 展開させないのが正しい。SC2016 はこの意図を区別できないので抑制する。
+          # fork 由来 PR を母集団から除外し (isCrossRepository)、base が BASE_BRANCH に
+          # 一致し、日付部が 8 桁数字に完全一致するブランチだけを対象にする。base を見ないと
+          # 同じ prefix で別 base（release ブランチ等）の PR を誤って close しうるほか、
+          # 別 base の新しい PR に newest を奪われて保持すべき PR が閉じられる。
+          # prefix・base は jq --arg で値渡しし、細工されたブランチ名がフィルタ式へ
+          # 混入しないようにする。
+          # $p / $base は jq の変数（--arg で渡す）であってシェル変数ではないため、
+          # 単一引用符で展開させないのが正しい。SC2016 はこの意図を区別できないので抑制する。
           # shellcheck disable=SC2016
           filter='.[] | select(.isCrossRepository | not)
+            | select(.baseRefName == $base)
             | select(.headRefName | startswith($p) and (.[($p | length):] | test("^[0-9]{8}$")))'
 
           # YYYYMMDD は辞書順と時系列順が一致するため文字列 sort で最新を選べる。
-          newest=$(jq -r --arg p "${BRANCH_PREFIX}-" "[${filter} | .headRefName] | sort | last // empty" <<<"${prs}")
+          newest=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" \
+            "[${filter} | .headRefName] | sort | last // empty" <<<"${prs}")
           if [ -z "${newest}" ]; then
             echo "対象となる更新 PR がないため何もしない"
             exit 0
           fi
 
-          targets=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg newest "${newest}" \
-            "${filter} | select(.headRefName != \$newest) | .number" <<<"${prs}")
+          # 番号とブランチ名の組で取る（ブランチ削除を close と分離するため）。
+          # 文字列補間 "\(.number)" ではなく @tsv を使う: エスケープ済みの \$newest を
+          # 含む二重引用符シェル文字列の中でさらに補間のエスケープが要る書式になり、
+          # 壊しやすいため。
+          targets=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" --arg newest "${newest}" \
+            "${filter} | select(.headRefName != \$newest) | [.number, .headRefName] | @tsv" <<<"${prs}")
           if [ -z "${targets}" ]; then
             echo "最新 (${newest}) のみのため閉じる対象なし"
             exit 0
@@ -563,22 +582,38 @@ jobs:
 
           msg="より新しい日次更新 PR (branch: ${newest}) が最新 ${BASE_BRANCH} 基準で同内容を再生成しているため close します。"
 
-          # close の失敗でジョブ全体を落とさない。これは更新本体ではなく後片付けであり、
-          # ブランチ削除を制限する ruleset 等で --delete-branch が弾かれただけで日次更新を
-          # 赤くするのは割に合わない。失敗は ::warning で必ず可視化する。
+          # close とブランチ削除は契約の異なる 2 操作なので分離する。--delete-branch に
+          # まとめると両者の失敗が同じ結果へ潰れる。PR を閉じることが本ステップの契約で
+          # あり失敗は fail-closed（最後に exit 1）、ブランチ削除は後片付けなので
+          # best-effort（::warning に留める。削除保護 ruleset で弾かれただけで日次更新を
+          # 赤くするのは割に合わない）。
+          #
+          # ref の DELETE はブランチ名のスラッシュをそのまま解決する（chore/... 形式で
+          # URL エンコード不要。2026-08-17 に本リポジトリの使い捨てブランチで実測。
+          # 存在しない ref への DELETE は HTTP 422 で終了コード 1 を返すことも実測済みで、
+          # 下の if による成否判定が成立する）。
           failed=0
-          while read -r pr; do
+          while IFS=$'\t' read -r pr branch; do
             [ -z "${pr}" ] && continue
-            if gh pr close "${pr}" --repo "${TARGET_REPO}" --delete-branch --comment "${msg}"; then
+            # PR を閉じることがこのステップの契約。失敗は握り潰さない
+            if gh pr close "${pr}" --repo "${TARGET_REPO}" --comment "${msg}"; then
               echo "closed #${pr}"
+              # ブランチ削除は best-effort。削除保護 ruleset で弾かれても
+              # PR は閉じており機能の目的は達成されているため、警告に留める
+              if gh api --method DELETE "repos/${TARGET_REPO}/git/refs/heads/${branch}" --silent; then
+                echo "deleted branch ${branch}"
+              else
+                echo "::warning::branch ${branch} の削除に失敗した（削除保護の可能性）。PR #${pr} は閉じている"
+              fi
             else
-              echo "::warning::PR #${pr} の close に失敗した（ブランチ削除保護などを確認すること）"
+              echo "::error::PR #${pr} の close に失敗した"
               failed=$((failed + 1))
             fi
           done <<<"${targets}"
 
           if [ "${failed}" -gt 0 ]; then
-            echo "::warning::${failed} 件の close に失敗した"
+            echo "::error::${failed} 件の close に失敗した"
+            exit 1
           fi
           exit 0
 
@@ -727,34 +762,53 @@ jobs:
             exit 1
           fi
           # --limit を明示する。gh の既定は 30 件で、フィルタの母集団は更新 PR だけでなく
-          # 全 open PR のため、PR 番号が 4 桁に達しているリポジトリでは古い更新 PR が
+          # （--base で絞った後の）全 open PR のため、既定のままでは古い更新 PR が
           # ページ外へ落ちて閉じられないまま残る（移行元 agent-reference-skills の欠陥）。
-          LIMIT=300
+          # 完全ページネーションにはしない。取りこぼしは下の ::warning で必ず可視化され
+          # 沈黙しないうえ、--base で母集団が「特定 base の open PR」に限定されるため、
+          # 1000 件超は現実的な運用範囲の外にある。上限 + 打ち切り警告のほうが
+          # 無制限ページネーションより API 消費が予測可能である。
+          LIMIT=1000
+          # --base でサーバー側でも base branch を絞る。下の filter にも同じ条件を
+          # 二重に持たせている（意図的）。サーバー側だけに寄せると、fixture が
+          # gh pr list の「出力」を模す以上 base 絞り込みがオフラインで検証不能になり、
+          # テスト済みのガードを未テストのガードへ置き換えることになるため。
+          # サーバー側は転送量とレート消費の削減、filter 側は検証可能性のために置く。
           prs=$(gh pr list --repo "${TARGET_REPO}" --state open --limit "${LIMIT}" \
-            --json number,headRefName,isCrossRepository)
+            --base "${BASE_BRANCH}" \
+            --json number,headRefName,isCrossRepository,baseRefName)
 
           if [ "$(jq 'length' <<<"${prs}")" -ge "${LIMIT}" ]; then
             echo "::warning::open PR が ${LIMIT} 件に達し一覧が打ち切られた可能性がある。古い更新 PR を取りこぼす場合は LIMIT を引き上げること"
           fi
 
-          # fork 由来 PR を母集団から除外し (isCrossRepository)、日付部が 8 桁数字に完全一致
-          # するブランチだけを対象にする。prefix は jq --arg で値渡しし、細工されたブランチ名が
-          # フィルタ式へ混入しないようにする。
-          # $p は jq の変数（--arg で渡す）であってシェル変数ではないため、単一引用符で
-          # 展開させないのが正しい。SC2016 はこの意図を区別できないので抑制する。
+          # fork 由来 PR を母集団から除外し (isCrossRepository)、base が BASE_BRANCH に
+          # 一致し、日付部が 8 桁数字に完全一致するブランチだけを対象にする。base を見ないと
+          # 同じ prefix で別 base（release ブランチ等）の PR を誤って close しうるほか、
+          # 別 base の新しい PR に newest を奪われて保持すべき PR が閉じられる。
+          # prefix・base は jq --arg で値渡しし、細工されたブランチ名がフィルタ式へ
+          # 混入しないようにする。
+          # $p / $base は jq の変数（--arg で渡す）であってシェル変数ではないため、
+          # 単一引用符で展開させないのが正しい。SC2016 はこの意図を区別できないので抑制する。
           # shellcheck disable=SC2016
           filter='.[] | select(.isCrossRepository | not)
+            | select(.baseRefName == $base)
             | select(.headRefName | startswith($p) and (.[($p | length):] | test("^[0-9]{8}$")))'
 
           # YYYYMMDD は辞書順と時系列順が一致するため文字列 sort で最新を選べる。
-          newest=$(jq -r --arg p "${BRANCH_PREFIX}-" "[${filter} | .headRefName] | sort | last // empty" <<<"${prs}")
+          newest=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" \
+            "[${filter} | .headRefName] | sort | last // empty" <<<"${prs}")
           if [ -z "${newest}" ]; then
             echo "対象となる更新 PR がないため何もしない"
             exit 0
           fi
 
-          targets=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg newest "${newest}" \
-            "${filter} | select(.headRefName != \$newest) | .number" <<<"${prs}")
+          # 番号とブランチ名の組で取る（ブランチ削除を close と分離するため）。
+          # 文字列補間 "\(.number)" ではなく @tsv を使う: エスケープ済みの \$newest を
+          # 含む二重引用符シェル文字列の中でさらに補間のエスケープが要る書式になり、
+          # 壊しやすいため。
+          targets=$(jq -r --arg p "${BRANCH_PREFIX}-" --arg base "${BASE_BRANCH}" --arg newest "${newest}" \
+            "${filter} | select(.headRefName != \$newest) | [.number, .headRefName] | @tsv" <<<"${prs}")
           if [ -z "${targets}" ]; then
             echo "最新 (${newest}) のみのため閉じる対象なし"
             exit 0
@@ -762,19 +816,29 @@ jobs:
 
           msg="より新しい日次更新 PR (branch: ${newest}) が最新 ${BASE_BRANCH} 基準で同内容を再生成しているため close します。"
 
-          # close 失敗を非致命にする理由は submodule ジョブ側の注記を参照。
+          # close は fail-closed・ブランチ削除は best-effort と分ける理由、および
+          # ref DELETE がスラッシュを素通しする実測記録は submodule ジョブ側の注記を参照。
           failed=0
-          while read -r pr; do
+          while IFS=$'\t' read -r pr branch; do
             [ -z "${pr}" ] && continue
-            if gh pr close "${pr}" --repo "${TARGET_REPO}" --delete-branch --comment "${msg}"; then
+            # PR を閉じることがこのステップの契約。失敗は握り潰さない
+            if gh pr close "${pr}" --repo "${TARGET_REPO}" --comment "${msg}"; then
               echo "closed #${pr}"
+              # ブランチ削除は best-effort。削除保護 ruleset で弾かれても
+              # PR は閉じており機能の目的は達成されているため、警告に留める
+              if gh api --method DELETE "repos/${TARGET_REPO}/git/refs/heads/${branch}" --silent; then
+                echo "deleted branch ${branch}"
+              else
+                echo "::warning::branch ${branch} の削除に失敗した（削除保護の可能性）。PR #${pr} は閉じている"
+              fi
             else
-              echo "::warning::PR #${pr} の close に失敗した（ブランチ削除保護などを確認すること）"
+              echo "::error::PR #${pr} の close に失敗した"
               failed=$((failed + 1))
             fi
           done <<<"${targets}"
 
           if [ "${failed}" -gt 0 ]; then
-            echo "::warning::${failed} 件の close に失敗した"
+            echo "::error::${failed} 件の close に失敗した"
+            exit 1
           fi
           exit 0
