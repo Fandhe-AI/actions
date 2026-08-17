@@ -45,9 +45,9 @@ reusable 化により、下流が持つのは wrapper 1 ファイルだけにな
 | `base-branch` | `main` | 更新対象ブランチ。checkout の `ref`・`.gitmodules` の存在判定・composite action の `base-branch` すべてに同じ値を使う |
 | `enable-submodule` | `true` | submodule 更新ジョブの要否。`.gitmodules` を持つが pin 固定運用で自動更新したくないリポジトリは `false` |
 | `enable-skills` | `true` | スキル更新ジョブの要否 |
-| `submodule-auto-merge` | `'false'` | submodule 更新 PR の auto-merge（`'true'` / `'false'` の文字列） |
+| `submodule-auto-merge` | `'false'` | submodule 更新 PR の auto-merge（`'true'` / `'false'` の文字列）。値域外は `validate-inputs` ジョブが fail-closed で失敗させる（`'yes'` 等が composite action へ素通りして auto-merge が意図せず有効になる fail-open を塞ぐ）。組織変数へ `True` / `1` を入れている場合は `true` / `false` へ直す |
 | `submodule-auto-merge-allowlist` | `''` | 同 allowlist |
-| `skills-auto-merge` | `'false'` | スキル更新 PR の auto-merge |
+| `skills-auto-merge` | `'false'` | スキル更新 PR の auto-merge。値域検証は `submodule-auto-merge` と同じ |
 | `skills-auto-merge-allowlist` | `''` | 同 allowlist |
 
 `node-version`（`24.19.0`）・`skills-version`（`1.5.22`）・`auto-merge-immediate-fallback`

@@ -197,6 +197,39 @@ jobs:
               ;;
           esac
 
+      # auto-merge は boolean ではなく文字列で受ける（呼び出し側が
+      # vars.* を素通しできるようにするため）。値域を検証しないと、
+      # 'yes' のような値が composite action へそのまま渡り、その先の
+      # 解釈次第で auto-merge が意図せず有効になる fail-open 経路になる。
+      # target と違い誤りが「何もしない」ではなく「余計にマージする」側に
+      # 倒れるため、ここで確実に落とす。
+      - name: Validate auto-merge flags
+        env:
+          SUBMODULE_AUTO_MERGE: ${{ inputs.submodule-auto-merge }}
+          SKILLS_AUTO_MERGE: ${{ inputs.skills-auto-merge }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 不正時も入力名だけを示し、受け取った値は出さない（target の
+          # 検証と同じ理由）。
+          case "${SUBMODULE_AUTO_MERGE}" in
+            true | false)
+              ;;
+            *)
+              echo "::error::submodule-auto-merge の値が不正。'true' / 'false' のいずれかを指定すること。"
+              exit 1
+              ;;
+          esac
+          case "${SKILLS_AUTO_MERGE}" in
+            true | false)
+              ;;
+            *)
+              echo "::error::skills-auto-merge の値が不正。'true' / 'false' のいずれかを指定すること。"
+              exit 1
+              ;;
+          esac
+          echo "::notice::auto-merge フラグの値域チェックを通過した。"
+
   # --------------------------------------------------
   # submodule 参照の更新 (Fandhe-AI/actions/submodule-update)
   # --------------------------------------------------
@@ -288,17 +321,24 @@ jobs:
               # `couldn't find remote ref` で明示的に失敗していた）。
               # 応答本文の文字列照合は脆いため、ref の解決可否を別途問い合わせて
               # 判別し、解決できない場合は skip せず失敗させる。
-              # ref の解決には git/ref/heads/{branch} を使う。/commits/{ref} は
-              # ブランチ名を単一パスセグメントとして扱うため、release/1.0 のような
-              # 正当な名前が複数セグメントに割れて 404 になり、存在するのに
-              # fail-closed で落ちる。git/ref は heads/ 以降の残り全体を ref として
-              # 解釈するため、スラッシュを含む名前をそのまま渡せる。
+              # ref はパスへ埋め込まず、直前の Contents API と同じく
+              # -G --data-urlencode でクエリパラメータとして渡す。ブランチ名を
+              # パスに連結すると、release/1.0 のスラッシュがセグメント境界に
+              # 割れるだけでなく、Git では使える `#`・`%`・空白が URL の意味を
+              # 変える。curl 側でエンコードさせればどちらも起きない。
+              # /commits?sha= は「ブランチ名またはコミット SHA」を受けるため、
+              # base-branch に SHA を渡した場合も解決可能と判定する。checkout は
+              # SHA でも通るので、この判定を緩めても本ステップの目的
+              # （ref が解決できないまま submodule 更新を黙って skip しない）は
+              # 損なわれない。
               ref_status=0
-              ref_code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              ref_code=$(curl -sS -o /dev/null -w '%{http_code}' -G \
+                --data-urlencode "sha=${BASE_BRANCH}" \
+                --data-urlencode "per_page=1" \
                 -H "Authorization: Bearer ${GH_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
-                "${GITHUB_API_URL}/repos/${REPO}/git/ref/heads/${BASE_BRANCH}") || ref_status=$?
+                "${GITHUB_API_URL}/repos/${REPO}/commits") || ref_status=$?
               if [ "${ref_status}" -ne 0 ] || [ "${ref_code}" != "200" ]; then
                 # base-branch は呼び出し側から渡る入力であり、workflow command 行
                 # （`::error::` 等）へ展開すると細工した値で workflow command を
