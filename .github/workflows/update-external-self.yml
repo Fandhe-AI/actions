@@ -1,0 +1,66 @@
+# 自リポジトリへ update-external を適用する wrapper（agent-cli-skills イシュー #259）。
+#
+# `.github/workflows/update-external.yml` は reusable 定義本体（`on: workflow_call`）で
+# あり、そのままでは本リポジトリ自身の外部ソース更新が走らない。そのため、他の
+# 呼び出し側リポジトリと同じ薄い wrapper を別ファイル名で追加して自己適用する。
+# 内容は wrapper テンプレート（update-external/templates/update-external.yml）相当。
+#
+# codex-review-self.yml との違い（意図的）: 呼び出し先を SHA ではなく同一コミットを指す
+# 相対参照 `./.github/workflows/update-external.yml` にしている。理由は 2 つ。
+#
+#   1. ブートストラップ: 本 wrapper と reusable 本体は同一 PR で導入されるため、
+#      pin すべき SHA（マージコミット）がファイル作成時点では存在しない。
+#      PR ブランチの先頭 SHA を書くと、squash マージ後に到達不能なコミットを
+#      参照し続けることになる
+#   2. 自己適用の性質: 本リポジトリは reusable 本体の提供元であり、自分自身の実行だけ
+#      過去バージョンへ据え置く意味がない。相対参照は常に同一コミットの本体を呼ぶため、
+#      本体を壊す変更は自リポジトリの定期実行で最初に顕在化する（下流より先に気付ける）
+#
+# 呼び出し側リポジトリ（下流）は相対参照を使えないため、必ず SHA 固定で参照する。
+name: Update external sources
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 00:00 UTC = 09:00 JST
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '更新対象 (手動実行時のみ有効。schedule は常に all)'
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - submodule
+          - skill
+
+permissions:
+  contents: read
+
+# reusable workflow のトップレベル concurrency は機能しないため呼び出し側で設定する
+concurrency:
+  group: update-external
+  cancel-in-progress: false
+
+jobs:
+  update-external:
+    uses: ./.github/workflows/update-external.yml
+    permissions:
+      contents: read
+    with:
+      # schedule 起動では inputs が null になるため all へフォールバックする
+      target: ${{ inputs.target || 'all' }}
+      # 本リポジトリは public のため組織 runner 方針に従い GitHub ホステッドを使う
+      # （既定値と同じだが、方針の明示のため書く）
+      runner-json: '"ubuntu-latest"'
+      # 組織変数は called workflow 内でも呼び出し側スコープで解決されるが、
+      # auto-merge はマージ可否を左右する設定のため、実効値が本ファイルを読むだけで
+      # 確定するよう呼び出し側で解決して渡す。未設定 (null/空) を有効と解釈する
+      # composite action の非対称設計に合わせ、明示的に 'false' へフォールバックする。
+      submodule-auto-merge: ${{ vars.SUBMODULE_AUTO_MERGE || 'false' }}
+      submodule-auto-merge-allowlist: ${{ vars.SUBMODULE_AUTO_MERGE_ALLOWLIST }}
+      skills-auto-merge: ${{ vars.SKILLS_AUTO_MERGE || 'false' }}
+      skills-auto-merge-allowlist: ${{ vars.SKILLS_AUTO_MERGE_ALLOWLIST }}
+    secrets:
+      SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+      SKILLS_PAT: ${{ secrets.SKILLS_PAT }}
