@@ -83,8 +83,8 @@ on:
       target:
         description: >
           更新対象。all / submodule / skill のいずれか。呼び出し側の schedule 起動では
-          all を渡す。未知の値を渡すと両ジョブとも skip される（wrapper 側の
-          workflow_dispatch input を choice 型にして値域を固定すること）。
+          all を渡す。値域外は validate-inputs ジョブが fail-closed で失敗させる
+          （wrapper 側の workflow_dispatch input も choice 型にして値域を固定すること）。
         type: string
         required: false
         default: all
@@ -160,6 +160,44 @@ on:
 
 jobs:
   # --------------------------------------------------
+  # 入力値域の検証（fail-closed ゲート）
+  # --------------------------------------------------
+  # target が all / submodule / skill 以外だと、両更新ジョブの if が false になり
+  # workflow 全体が「成功したのに何も更新していない」状態で終わる。wrapper 側の
+  # choice 型は推奨にすぎず、reusable workflow は別の caller からも任意の文字列を
+  # 受け取れるため、値域外を明示的に失敗させる。
+  #
+  # 両更新ジョブは本ジョブを needs に取るため、検証が落ちれば更新は実行されない
+  # （ジョブの if には状態関数を含めていないので、needs 失敗時は skip される）。
+  validate-inputs:
+    name: Validate inputs
+    # 更新ジョブと同じランナーを使う（組織 runner 方針の分岐を 1 箇所に保つため）。
+    runs-on: ${{ fromJSON(inputs.runner-json) }}
+    timeout-minutes: 5
+    # 何もチェックアウトせず API も呼ばないため権限は不要。
+    permissions: {}
+    steps:
+      - name: Validate target
+        env:
+          TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${TARGET}" in
+            all | submodule | skill)
+              echo "::notice::target の値域チェックを通過した。"
+              ;;
+            *)
+              # 受け取った値は workflow command 行にもログにも出さない
+              # （run ステップの出力は workflow command として解釈されるため、
+              #   外部由来の値を流すと注入経路になる）。指定値は起動時の
+              #   inputs 表示で確認する。
+              echo "::error::target の値が不正。all / submodule / skill のいずれかを指定すること。"
+              exit 1
+              ;;
+          esac
+
+  # --------------------------------------------------
   # submodule 参照の更新 (Fandhe-AI/actions/submodule-update)
   # --------------------------------------------------
   # 前提の確認事項: .gitmodules を持たないリポジトリでは、先頭の存在判定ステップが
@@ -172,6 +210,7 @@ jobs:
   # 無効化する（存在判定では区別できないため）。
   submodule:
     name: Update submodule references
+    needs: validate-inputs
     if: ${{ inputs.enable-submodule && contains(fromJSON('["all", "submodule"]'), inputs.target) }}
     # 実行ランナーは呼び出し側が runner-json で指定する。値の書式は input の
     # description を参照（必ず JSON リテラル）。`||` を fromJSON の外（文字列側）へ
@@ -256,7 +295,12 @@ jobs:
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 "${GITHUB_API_URL}/repos/${REPO}/commits/${BASE_BRANCH}") || ref_status=$?
               if [ "${ref_status}" -ne 0 ] || [ "${ref_code}" != "200" ]; then
-                echo "::error::ref ${BASE_BRANCH} を解決できない（curl ${ref_status} / HTTP ${ref_code}）。"
+                # base-branch は呼び出し側から渡る入力であり、workflow command 行
+                # （`::error::` 等）へ展開すると細工した値で workflow command を
+                # 注入できる。値はログへも出さず（run ステップの出力は stdout/stderr
+                # とも workflow command として解釈されるため）、指定値は起動時の
+                # inputs 表示で確認する。
+                echo "::error::base-branch に指定されたブランチを ref として解決できない（curl ${ref_status} / HTTP ${ref_code}）。呼び出し側 wrapper の base-branch を確認すること。"
                 exit 1
               fi
               echo "present=false" >> "${GITHUB_OUTPUT}"
@@ -348,6 +392,7 @@ jobs:
   # 対称性より「黙って止まらないこと」を優先し、本ジョブは PAT 必須のままとする。
   skills:
     name: Update agent skills
+    needs: validate-inputs
     if: ${{ inputs.enable-skills && contains(fromJSON('["all", "skill"]'), inputs.target) }}
     # 実行ランナーは呼び出し側が runner-json で指定する。書式は input の description を参照。
     runs-on: ${{ fromJSON(inputs.runner-json) }}

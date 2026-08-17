@@ -40,7 +40,7 @@ reusable 化により、下流が持つのは wrapper 1 ファイルだけにな
 
 | input | 既定 | 説明 |
 |-------|------|------|
-| `target` | `all` | 更新対象（`all` / `submodule` / `skill`）。wrapper の `workflow_dispatch` を choice 型にして値域を固定する。未知の値は両ジョブ skip になる |
+| `target` | `all` | 更新対象（`all` / `submodule` / `skill`）。値域外は `validate-inputs` ジョブが fail-closed で失敗させる（「成功したのに何も更新していない」を作らない）。wrapper の `workflow_dispatch` も choice 型にして値域を固定する |
 | `runner-json` | `'"ubuntu-latest"'` | `runs-on` へ渡す **JSON リテラル**。単一ラベルは `'"ubuntu-latest"'`、複数ラベルは `'["self-hosted","Linux"]'`。素の `self-hosted` は JSON として不正で workflow が起動しない |
 | `base-branch` | `main` | 更新対象ブランチ。checkout の `ref`・`.gitmodules` の存在判定・composite action の `base-branch` すべてに同じ値を使う |
 | `enable-submodule` | `true` | submodule 更新ジョブの要否。`.gitmodules` を持つが pin 固定運用で自動更新したくないリポジトリは `false` |
