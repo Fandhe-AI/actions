@@ -145,6 +145,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -166,11 +167,14 @@ jobs:
             *) emit false "head branch が同期 PR の接頭辞に一致しない (${HEAD_REF})" ;;
           esac
 
+          # status と previous_filename も取る。filename だけを見ると、許可範囲外の
+          # ファイルを許可パス配下へ rename した PR が「新しい名前」だけで許可判定を
+          # 通り、範囲外ファイルの削除を隠せる（PR #87 codex P0）。
           # PR files API は --paginate でも 3000 件で打ち切られる。上限に達した一覧は
           # 「対象外ファイルが無い」ことの証明にならないため判定不能として扱う
           if ! files=$(gh api --paginate \
                 "repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
-                --jq '.[].filename'); then
+                --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv'); then
             emit false "変更ファイル一覧を取得できなかった"
           fi
           if [ -z "${files}" ]; then
@@ -186,9 +190,21 @@ jobs:
             # 実測（agent-cli-skills / yadori / life-plan-app / fandhe-backend /
             # pet-hub / baby-tasks-app の直近同期 PR）でもこの 3 種のみだった
             allow_re='^(\.agents/skills/|\.claude/skills/|skills-lock\.json$)'
-            while IFS= read -r f; do
-              if [ -n "${f}" ] && ! printf '%s\n' "${f}" | grep -qE "${allow_re}"; then
+            while IFS=$'\t' read -r status f prev; do
+              if [ -z "${f}" ]; then
+                continue
+              fi
+              if ! printf '%s\n' "${f}" | grep -qE "${allow_re}"; then
                 emit false "同期の範囲外のファイルを含む: ${f}"
+              fi
+              # rename は新旧の両方が許可範囲に無ければ認めない（旧側の削除が隠れる）
+              if [ "${status}" = renamed ]; then
+                if [ -z "${prev}" ]; then
+                  emit false "rename の旧パスを取得できない: ${f}"
+                fi
+                if ! printf '%s\n' "${prev}" | grep -qE "${allow_re}"; then
+                  emit false "許可範囲外からの rename を含む: ${prev} -> ${f}"
+                fi
               fi
             done < <(printf '%s\n' "${files}")
           else
@@ -209,10 +225,29 @@ jobs:
             if [ -z "${sub_paths}" ]; then
               emit false ".gitmodules から submodule のパスを抽出できなかった"
             fi
-            while IFS= read -r f; do
-              if [ -n "${f}" ] && ! printf '%s\n' "${sub_paths}" | grep -qxF "${f}"; then
+            while IFS=$'\t' read -r status f prev; do
+              if [ -z "${f}" ]; then
+                continue
+              fi
+              if ! printf '%s\n' "${sub_paths}" | grep -qxF "${f}"; then
                 emit false "submodule の gitlink 以外を含む: ${f}"
               fi
+              if [ "${status}" = renamed ]; then
+                emit false "submodule 同期に rename は現れない: ${prev} -> ${f}"
+              fi
+              # パス名の一致だけでは、登録済み submodule を通常ファイル・symlink・
+              # ディレクトリへ置換した変更や削除も通ってしまう。base と head の
+              # 双方でエントリが gitlink（contents API の type=submodule）である
+              # ことを実測する（PR #87 codex P0）
+              for ref in "${BASE_SHA}" "${HEAD_SHA}"; do
+                if ! entry_type=$(gh api \
+                      "repos/${REPO}/contents/${f}?ref=${ref}" --jq '.type'); then
+                  emit false "gitlink の型を確認できない: ${f}@${ref}"
+                fi
+                if [ "${entry_type}" != submodule ]; then
+                  emit false "gitlink ではない変更を含む: ${f}@${ref} は ${entry_type}"
+                fi
+              done
             done < <(printf '%s\n' "${files}")
           fi
 
