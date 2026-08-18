@@ -35,3 +35,10 @@ jobs:
       # P2/P3 もブロック対象へ追加したい場合は block-priorities を渡す
       # （既定は "P0,P1"。P0/P1 は除外不可で、P2/P3 の追加のみ調整できる）:
       # block-priorities: "P0,P1,P2"
+      # update-external.yml による日次同期 PR をレビュー対象から外す場合は
+      # skip-sync-pr-review を渡す（既定 false。同期 PR は上流の取り込みそのもので、
+      # 指摘の修正先が上流リポジトリにしかないため）。判定は sync-gate ジョブが
+      # 変更ファイル集合を実測して行い、ブランチ名だけでは skip しない。codex ジョブは
+      # job 単位で skip され、check-run は skipped 結論で生成されるので required
+      # status check は満たされる:
+      # skip-sync-pr-review: true

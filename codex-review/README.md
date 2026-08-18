@@ -130,6 +130,10 @@ gh run view <run-id> --repo Fandhe-AI/<repo> --json jobs \
 PR レビュー（またはフォールバック時の issue コメント）が投稿されていれば導入完了。
 `skipped` の場合は「注意事項」のトラブルシューティングを参照。
 
+なお `skip-sync-pr-review: true` を渡している場合、`update-external.yml` が生成した
+同期 PR は意図どおり `skipped` になる（`sync-gate` ジョブの実行ログに判定理由が出る）。
+動作確認は通常のブランチから作った PR で行うこと。
+
 ### 6. レビュー基準のカスタマイズ（任意）
 
 何も置かなければ同梱既定版（`codex-review/prompts/review.md` の汎用レビュー基準）で動く。
@@ -155,6 +159,34 @@ PR 自身がレビュー基準を書き換えても当の PR のレビューに�
 | `prompt-path` | - | `.github/codex/prompts/review.md` | 呼び出し側リポジトリの prompt パス（base に無ければ同梱既定版） |
 | `schema-path` | - | `.github/codex/review-schema.json` | 呼び出し側リポジトリの schema パス（base に無ければ同梱既定版） |
 | `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り。例 `P0,P1,P2`）。P0/P1 は必須集合（gate の弱体化防止のため除外不可）で、調整できるのは P2/P3 の追加のみ。含まれない P2/P3 は advisory（コメント投稿のみ）。P0/P1 を欠く指定・空・P0〜P3 以外は fail-closed で拒否 |
+| `skip-sync-pr-review` | - | `false` | `true` で日次同期 PR（`update-external.yml` が生成する）の codex ジョブを skip する。同期 PR は上流の取り込みそのもので、指摘の修正先が取り込み元の上流リポジトリにしかないため。判定は head branch 名だけでは行わず、`sync-gate` ジョブが変更ファイル集合を PR files API で実測し、同期が触る範囲（skills: `.agents/skills/**` / `.claude/skills/**` / `skills-lock.json`、submodule: base の `.gitmodules` に登録された gitlink のみ。`.gitmodules` 自体の変更を含む PR は skip しない。gitlink は base / head 双方で Git Trees API の `mode == 160000` / `type == commit` まで実測し、通常ファイル・symlink への置換や削除は skip しない。rename は skills 側で新旧両パスが許可範囲にある場合のみ許容し、submodule 側では一律 skip しない）に収まる場合だけ skip する。判定不能・範囲外の混入はレビュー実行側へ倒す |
+
+### `skip-sync-pr-review` の受容済み残留リスク（2026-08-18 オーナー判断）
+
+`sync-gate` は「同期 PR かどうか」を head branch の接頭辞と変更ファイル集合で判定する。
+**この判定は、リポジトリへ push できる主体による偽装を防げない。** 同期 PR を作る PAT の
+持ち主は人手の PR を出す本人と同一アカウントであり（Fandhe-AI 配下の同期 PR 全件で実測。
+例: `yadori` #667 / `fandhe-backend` #640 の author はいずれも人手 PR と同じ）、
+GitHub 上に「その PR が同期ワークフロー由来である」ことを示す偽造不能な signal は無い。
+署名済みコミット・actor 名・`workflow_dispatch` はいずれも write 権限があれば再現できる。
+
+したがってこの入力を有効にしたリポジトリでは、write 権限を持つ主体が
+`chore/skills-update-*` ブランチから許可パス配下（`.agents/skills/**` /
+`.claude/skills/**` / `skills-lock.json`）だけを書き換える PR を出すと、
+codex レビューと P0/P1 gate を通らずにマージ候補まで到達できる。
+
+この残留を承知のうえで有効化する判断を採っている。根拠は次の 3 点。
+
+- 迂回できるのは対象リポジトリへ push できる主体に限られる（fork PR は `sync-gate` 自体が
+  起動しない）。この集合は Fandhe-AI 配下では実質オーナーとその資格情報で動くエージェントで、
+  同期 PR を生成している主体そのものと一致する。**write 権限と ruleset 管理権限は別である**
+  ため「迂回できる者は ruleset も変えられる」とは言えない点に注意する。第三者の write
+  コラボレーターを迎える場合はこの入力を `false` へ戻す判断が要る
+- 迂回で持ち込める範囲は次回の同期が上書きする vendor 領域に限定される。
+  範囲外のファイルが 1 件でも混ざれば `sync-gate` はレビューを実行する
+- Cursor Bugbot は Actions 側の skip の影響を受けず、同期 PR も従来どおりレビューする
+
+有効化しないリポジトリ（既定 `false`）では `sync-gate` 自体が起動せず、この経路は存在しない。
 
 ## runner 構築
 
