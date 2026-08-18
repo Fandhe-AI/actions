@@ -37,20 +37,33 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
 
 ## 前提条件
 
-1. **呼び出し側リポジトリに `rust-toolchain.toml` が存在すること**。本 workflow が内部で使う
-   `rust-toolchain-setup` は rustup を `--default-toolchain none` で導入し
-   `rust-toolchain.toml` を単一真実源とするため、「rustup 未導入かつ `rust-toolchain.toml`
-   不在」の runner では既定ツールチェーンが決まらず `cargo` が失敗する
+1. **runner に正常動作する rustup が導入済みであること**。本 workflow が内部で使う
+   `rust-toolchain-setup` は **v1.1.0 以降、rustup が未導入・破損している場合に
+   ネットワーク導入せず fail-closed でエラー終了する**（`Fandhe-AI/actions#86`）。
+   GitHub ホステッドランナー（`ubuntu-latest` 等）は rustup 同梱のため追加作業は不要。
+   self-hosted runner は **runner イメージ側で rustup を用意する**
+
+   > **挙動差分（v1.1.0 未満からの更新時）**: 従来は rustup 不在時に
+   > `curl https://sh.rustup.rs | sh` で自動導入していたが、pin できないリモート
+   > コードをジョブ権限で実行する供給網リスク（OWASP A08 相当）のため既定で行わない。
+   > **rustup を持たない self-hosted runner を使っている呼び出し側は、この更新で
+   > ジョブが失敗するようになる**。恒久対応は runner イメージへの rustup 導入。
+   > どうしても runner 上で導入する必要がある場合のみ、`rust-toolchain-setup` の
+   > `allow-network-install: 'true'` を明示する（本 workflow は透過していないため、
+   > 必要なら呼び出し側で本 workflow を使わず action を直接呼ぶ）
+2. **呼び出し側リポジトリに `rust-toolchain.toml` が存在すること**。
+   `rust-toolchain-setup` は `rust-toolchain.toml` を単一真実源として toolchain を
+   同期するため、不在の runner では既定ツールチェーンが決まらず `cargo` が失敗する
    （移行元 `ci.yml` の `--default-toolchain stable` からの挙動差分）
-2. `cargo deny` を有効にする場合、リポジトリルートに `deny.toml` が存在すること
+3. `cargo deny` を有効にする場合、リポジトリルートに `deny.toml` が存在すること
    （不在時は `deny` ジョブが `success` のまま skip される）。`cargo-deny` 本体は
    `rust-toolchain.toml` の固定チャネルではなく、`deny` ジョブが別途導入する **stable**
    でビルドされる（`cargo-deny` 0.20.x の MSRV は 1.88.0 であり、呼び出し側がそれより
    古いチャネルを固定していてもインストールが失敗しないようにするため）。
    `cargo deny check` 自体は呼び出し側の `rust-toolchain.toml` の toolchain で実行される
-3. runner が利用可能であること。private リポジトリは self-hosted、public リポジトリは
+4. runner が利用可能であること。private リポジトリは self-hosted、public リポジトリは
    GitHub ホステッド（`ubuntu-latest` 等）を `runner-label` で指定する
-4. 本リポジトリ（`Fandhe-AI/actions`）は public のため、workflow 共有（提供側）の設定は
+5. 本リポジトリ（`Fandhe-AI/actions`）は public のため、workflow 共有（提供側）の設定は
    不要。ただし利用側の org / リポジトリの **Settings → Actions → General** で外部
    Action / workflow の利用が制限されている場合は許可が必要
 
@@ -150,9 +163,11 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 本 workflow が内部で参照する **本リポジトリ内の action**
 （`rust-toolchain-setup`）は、相対参照
 （`uses: ./rust-toolchain-setup`）が**呼び出し側リポジトリのチェックアウト**を指してしまう
-ため使えず、`Fandhe-AI/actions/<action>@<SHA>` 形式で固定している。この SHA は本ファイル
-追加前の main の SHA である（自分自身のコミット SHA は作成時点で存在しない）。参照先の
-action を更新した際は `.github/workflows/rust-base-ci.yml` 内の各 SHA を手動で追随させる。
+ため使えず、`Fandhe-AI/actions/<action>@<SHA> # <バージョン>` 形式で固定している
+（`# main` のような可動参照ラベルはコメントにも書かない）。参照先の action を更新した
+際は `.github/workflows/rust-base-ci.yml` 内の各 SHA を手動で追随させ、**呼び出し側も
+本 workflow の新しい SHA へ更新する**（内部 pin を直しただけでは、古い SHA で本 workflow
+を呼んでいるリポジトリには反映されない）。
 
 外部 action（`actions/checkout` / `actions/cache`）の SHA を更新する場合は、タグの実コミット
 SHA を API で解決して使う（値をでっち上げない）:
