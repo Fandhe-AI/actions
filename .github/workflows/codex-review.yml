@@ -147,7 +147,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
           # 判定結果の唯一の出口。呼ばずにスクリプトが死んだ場合は output 自体が
           # 空になり、codex 側の `!= 'true'` がレビュー実行側へ倒れる（fail-closed）
@@ -158,16 +158,13 @@ jobs:
           }
 
           # 接頭辞は update-external.yml が skills-update / submodule-update action へ
-          # 渡す branch-prefix と対になっている（片方を変えたら両方直すこと）
+          # 渡す branch-prefix と対になっている（片方を変えたら両方直すこと）。
+          # ブランチ名は誰でも付けられるため、これは判定の入口でしかない
           case "${HEAD_REF}" in
             chore/skills-update*)    kind=skills ;;
             chore/submodule-update*) kind=submodule ;;
             *) emit false "head branch が同期 PR の接頭辞に一致しない (${HEAD_REF})" ;;
           esac
-
-          if ! command -v jq >/dev/null 2>&1; then
-            emit false "jq が無く変更ファイルを解析できない"
-          fi
 
           # PR files API は --paginate でも 3000 件で打ち切られる。上限に達した一覧は
           # 「対象外ファイルが無い」ことの証明にならないため判定不能として扱う
@@ -190,15 +187,17 @@ jobs:
             # pet-hub / baby-tasks-app の直近同期 PR）でもこの 3 種のみだった
             allow_re='^(\.agents/skills/|\.claude/skills/|skills-lock\.json$)'
             while IFS= read -r f; do
-              [ -z "${f}" ] && continue
-              if ! printf '%s\n' "${f}" | grep -qE "${allow_re}"; then
+              if [ -n "${f}" ] && ! printf '%s\n' "${f}" | grep -qE "${allow_re}"; then
                 emit false "同期の範囲外のファイルを含む: ${f}"
               fi
             done < <(printf '%s\n' "${files}")
           else
-            # submodule-update が触るのは .gitmodules に登録された submodule の
-            # gitlink だけ。許可パスはリポジトリごとに異なるため、base コミットの
-            # .gitmodules（PR 側の内容は信用しない）から実測して突き合わせる
+            # submodule-update が触るのは .gitmodules に登録済み submodule の gitlink
+            # だけで、.gitmodules 自体は変更しない。許可パスはリポジトリごとに異なる
+            # ため、base コミットの .gitmodules（PR 側の内容は信用しない）から実測する。
+            # .gitmodules 自体が変更されている PR は許可集合に載らず skip されない
+            # （url の差し替えでサプライチェーンを乗っ取る経路を塞ぐ。PR #87 の
+            # codex P0 / Bugbot High）
             if ! gitmodules=$(gh api \
                   -H "Accept: application/vnd.github.raw" \
                   "repos/${REPO}/contents/.gitmodules?ref=${BASE_SHA}"); then
@@ -211,10 +210,8 @@ jobs:
               emit false ".gitmodules から submodule のパスを抽出できなかった"
             fi
             while IFS= read -r f; do
-              [ -z "${f}" ] && continue
-              [ "${f}" = ".gitmodules" ] && continue
-              if ! printf '%s\n' "${sub_paths}" | grep -qxF "${f}"; then
-                emit false "submodule 以外のファイルを含む: ${f}"
+              if [ -n "${f}" ] && ! printf '%s\n' "${sub_paths}" | grep -qxF "${f}"; then
+                emit false "submodule の gitlink 以外を含む: ${f}"
               fi
             done < <(printf '%s\n' "${files}")
           fi

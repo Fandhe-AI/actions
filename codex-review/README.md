@@ -159,7 +159,7 @@ PR 自身がレビュー基準を書き換えても当の PR のレビューに�
 | `prompt-path` | - | `.github/codex/prompts/review.md` | 呼び出し側リポジトリの prompt パス（base に無ければ同梱既定版） |
 | `schema-path` | - | `.github/codex/review-schema.json` | 呼び出し側リポジトリの schema パス（base に無ければ同梱既定版） |
 | `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り。例 `P0,P1,P2`）。P0/P1 は必須集合（gate の弱体化防止のため除外不可）で、調整できるのは P2/P3 の追加のみ。含まれない P2/P3 は advisory（コメント投稿のみ）。P0/P1 を欠く指定・空・P0〜P3 以外は fail-closed で拒否 |
-| `skip-sync-pr-review` | - | `false` | `true` で日次同期 PR（`update-external.yml` が生成する）の codex ジョブを skip する。同期 PR は上流の取り込みそのもので、指摘の修正先が取り込み元の上流リポジトリにしかないため。判定は head branch 名だけでは行わず、`sync-gate` ジョブが変更ファイル集合を PR files API で実測し、同期が触る範囲（skills: `.agents/skills/**` / `.claude/skills/**` / `skills-lock.json`、submodule: base の `.gitmodules` に登録されたパス）に収まる場合だけ skip する。判定不能・範囲外の混入はレビュー実行側へ倒す |
+| `skip-sync-pr-review` | - | `false` | `true` で日次同期 PR（`update-external.yml` が生成する）の codex ジョブを skip する。同期 PR は上流の取り込みそのもので、指摘の修正先が取り込み元の上流リポジトリにしかないため。判定は head branch 名だけでは行わず、`sync-gate` ジョブが変更ファイル集合を PR files API で実測し、同期が触る範囲（skills: `.agents/skills/**` / `.claude/skills/**` / `skills-lock.json`、submodule: base の `.gitmodules` に登録された gitlink のみ。`.gitmodules` 自体の変更を含む PR は skip しない）に収まる場合だけ skip する。判定不能・範囲外の混入はレビュー実行側へ倒す |
 
 ## runner 構築
 
