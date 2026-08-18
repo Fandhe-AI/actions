@@ -96,12 +96,15 @@ on:
         default: "P0,P1"
       skip-sync-pr-review:
         description: >-
-          本リポジトリの update-external.yml が生成する日次同期 PR
-          （head branch が chore/skills-update* / chore/submodule-update*）で
-          codex レビューを skip する。同期 PR の差分は上流スキル / submodule の
-          取り込みそのものであり、指摘があっても修正できる場所は取り込み元の
-          上流リポジトリしかない。レビューを回してもその PR では解消できず、
-          マージだけが滞る。既定 false（従来どおり全 PR をレビューする）
+          本リポジトリの update-external.yml が生成する日次同期 PR で codex レビューを
+          skip する。同期 PR の差分は上流スキル / submodule の取り込みそのものであり、
+          指摘があっても修正できる場所は取り込み元の上流リポジトリしかない。
+          レビューを回してもその PR では解消できず、マージだけが滞る。
+          判定は head branch 名だけでは行わない（ブランチ名は誰でも付けられるため、
+          接頭辞だけを条件にすると任意の変更が chore/skills-update-* から提出する
+          だけで P0/P1 gate を回避できてしまう）。sync-gate ジョブが接頭辞に加えて
+          変更ファイル集合を実測し、同期が触る範囲だけの差分であることを確認した
+          場合にのみ skip する。既定 false（従来どおり全 PR をレビューする）
         type: boolean
         required: false
         default: false
@@ -110,26 +113,134 @@ permissions:
   contents: read
 
 jobs:
+  # 日次同期 PR（update-external.yml が生成）かどうかを実測で判定するゲート。
+  # skip-sync-pr-review: true の呼び出し側でのみ起動し、それ以外では skip されて
+  # outputs が空になる（codex 側は空を「skip しない」と解釈する fail-closed）。
+  #
+  # なぜ head branch の接頭辞だけで判定しないか: ブランチ名は同一リポジトリへ push
+  # できる誰でも付けられる。接頭辞だけを条件にすると、任意の変更を
+  # chore/skills-update-evil から提出するだけで codex レビューと P0/P1 gate を
+  # 丸ごと回避できる（共有 gh 認証で動くエージェントも同じ経路を踏める）。
+  # そこで接頭辞に加えて「変更ファイル集合が同期の触る範囲に収まっていること」を
+  # PR files API で実測する。取得・解析に失敗した場合はレビューを実行する側へ倒す。
+  #
+  # 資格情報（CODEX_HOME）には触れないため post-feedback 側の runner ラベルを使う。
+  sync-gate:
+    runs-on: ${{ inputs.post-feedback-runner-label }}
+    timeout-minutes: 5
+    if: >-
+      inputs.skip-sync-pr-review &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+    steps:
+      - name: Decide whether this PR is a generated sync PR
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # 判定結果の唯一の出口。呼ばずにスクリプトが死んだ場合は output 自体が
+          # 空になり、codex 側の `!= 'true'` がレビュー実行側へ倒れる（fail-closed）
+          emit() {
+            echo "skip=$1" >> "${GITHUB_OUTPUT}"
+            echo "判定: skip=$1 — $2"
+            exit 0
+          }
+
+          # 接頭辞は update-external.yml が skills-update / submodule-update action へ
+          # 渡す branch-prefix と対になっている（片方を変えたら両方直すこと）
+          case "${HEAD_REF}" in
+            chore/skills-update*)    kind=skills ;;
+            chore/submodule-update*) kind=submodule ;;
+            *) emit false "head branch が同期 PR の接頭辞に一致しない (${HEAD_REF})" ;;
+          esac
+
+          if ! command -v jq >/dev/null 2>&1; then
+            emit false "jq が無く変更ファイルを解析できない"
+          fi
+
+          # PR files API は --paginate でも 3000 件で打ち切られる。上限に達した一覧は
+          # 「対象外ファイルが無い」ことの証明にならないため判定不能として扱う
+          if ! files=$(gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
+                --jq '.[].filename'); then
+            emit false "変更ファイル一覧を取得できなかった"
+          fi
+          if [ -z "${files}" ]; then
+            emit false "変更ファイルが 0 件（判定材料が無い）"
+          fi
+          count=$(printf '%s\n' "${files}" | grep -c '' || true)
+          if [ "${count}" -ge 3000 ]; then
+            emit false "変更ファイルが API 上限（3000 件）に達しており全件を確認できない"
+          fi
+
+          if [ "${kind}" = skills ]; then
+            # skills-update が触る範囲: vendor 先のスキル実体・.claude 側の参照・lock。
+            # 実測（agent-cli-skills / yadori / life-plan-app / fandhe-backend /
+            # pet-hub / baby-tasks-app の直近同期 PR）でもこの 3 種のみだった
+            allow_re='^(\.agents/skills/|\.claude/skills/|skills-lock\.json$)'
+            while IFS= read -r f; do
+              [ -z "${f}" ] && continue
+              if ! printf '%s\n' "${f}" | grep -qE "${allow_re}"; then
+                emit false "同期の範囲外のファイルを含む: ${f}"
+              fi
+            done < <(printf '%s\n' "${files}")
+          else
+            # submodule-update が触るのは .gitmodules に登録された submodule の
+            # gitlink だけ。許可パスはリポジトリごとに異なるため、base コミットの
+            # .gitmodules（PR 側の内容は信用しない）から実測して突き合わせる
+            if ! gitmodules=$(gh api \
+                  -H "Accept: application/vnd.github.raw" \
+                  "repos/${REPO}/contents/.gitmodules?ref=${BASE_SHA}"); then
+              emit false "base の .gitmodules を取得できなかった"
+            fi
+            sub_paths=$(printf '%s\n' "${gitmodules}" \
+              | sed -n 's/^[[:space:]]*path[[:space:]]*=[[:space:]]*//p' \
+              | sed 's/[[:space:]]*$//')
+            if [ -z "${sub_paths}" ]; then
+              emit false ".gitmodules から submodule のパスを抽出できなかった"
+            fi
+            while IFS= read -r f; do
+              [ -z "${f}" ] && continue
+              [ "${f}" = ".gitmodules" ] && continue
+              if ! printf '%s\n' "${sub_paths}" | grep -qxF "${f}"; then
+                emit false "submodule 以外のファイルを含む: ${f}"
+              fi
+            done < <(printf '%s\n' "${files}")
+          fi
+
+          emit true "生成された同期 PR と実測で確認できた (kind=${kind}, files=${count})"
+
   codex:
     runs-on: ${{ inputs.runner-label }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     # (1) CODEX_HOME_DIR 未設定（runner 未準備）の間は実行しない
     #     （vars は呼び出し側リポジトリ／org の Actions variables を参照する）
     # (2) fork PR では untrusted コードを self-hosted runner で実行しない（fail-closed）
-    # (3) skip-sync-pr-review: true の呼び出し側では、日次同期 PR をレビュー対象から外す。
-    #     接頭辞リテラルは同リポジトリの .github/workflows/update-external.yml が
-    #     skills-update / submodule-update action へ渡す branch-prefix と対になっている
-    #     （片方を変えたら両方直すこと。GitHub Actions の if 式には反復がないため、
-    #     入力で受けたリストを回す形にはできず、生成側と同居する利点を採ってリテラルで書く）。
+    # (3) sync-gate が「同期 PR と実測で確認できた」と判定した場合のみレビューを外す
+    #     （skip-sync-pr-review: true の呼び出し側でのみ起動する。判定根拠は同ジョブの注記）。
     #     skip は job 単位に留める。check-run 自体は "skipped" 結論で生成されるため
     #     required status check を満たせる。workflow / paths フィルタで workflow ごと
-    #     起動しない形にすると check-run が作られず Expected のまま埋まらないため不可
+    #     起動しない形にすると check-run が作られず Expected のまま埋まらないため不可。
+    #     !cancelled() は sync-gate が skip / 失敗したケースを拾うために必要
+    #     （needs が skip / 失敗すると既定では本ジョブごと skip され、レビューが
+    #     静かに消える fail-open になる。判定できなければレビューする側へ倒す）
+    needs: sync-gate
     if: >-
+      !cancelled() &&
       vars.CODEX_HOME_DIR != '' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      !(inputs.skip-sync-pr-review &&
-      (startsWith(github.event.pull_request.head.ref, 'chore/skills-update') ||
-      startsWith(github.event.pull_request.head.ref, 'chore/submodule-update')))
+      needs.sync-gate.outputs.skip != 'true'
     # pull-requests: read は「Collect unresolved review threads」ステップが未解決
     # レビュースレッド一覧を読むためだけに使う読み取り権限。書き込み権限
     # （pull-requests: write）は従来どおり post_feedback ジョブのみが持ち、

@@ -32,10 +32,11 @@ jobs:
     # with:
     #   block-priorities: "P0,P1,P2"
     #
-    # update-external.yml による日次同期 PR（head branch が chore/skills-update* /
-    # chore/submodule-update*）をレビュー対象から外す場合は skip-sync-pr-review を渡す
-    # （既定 false。同期 PR は上流の取り込みそのもので、指摘の修正先が上流リポジトリに
-    # しかないため。codex ジョブは job 単位で skip され、check-run は skipped 結論で
-    # 生成されるので required status check は満たされる）:
+    # update-external.yml による日次同期 PR をレビュー対象から外す場合は
+    # skip-sync-pr-review を渡す（既定 false。同期 PR は上流の取り込みそのもので、
+    # 指摘の修正先が上流リポジトリにしかないため）。判定は sync-gate ジョブが
+    # 変更ファイル集合を実測して行い、ブランチ名だけでは skip しない。codex ジョブは
+    # job 単位で skip され、check-run は skipped 結論で生成されるので required
+    # status check は満たされる:
     # with:
     #   skip-sync-pr-review: true
