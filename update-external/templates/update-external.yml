@@ -1,6 +1,6 @@
 # 外部ソース定期更新（submodule 参照 / エージェントスキル）の wrapper テンプレート。
-# 呼び出し側リポジトリの .github/workflows/update-external.yml へコピーし、<SHA> を
-# Fandhe-AI/actions のコミット SHA へ差し替える。導入手順は Fandhe-AI/actions の
+# 呼び出し側リポジトリの .github/workflows/update-external.yml へコピーして使う。
+# 参照は `@latest` のままでよい（main へ自動追従する）。導入手順は Fandhe-AI/actions の
 # update-external/README.md「セットアップ」を参照。
 #
 # 実装本体・fail-closed ガードの設計コメントは Fandhe-AI/actions の
@@ -33,8 +33,7 @@ concurrency:
 
 jobs:
   update-external:
-    # <SHA> は Fandhe-AI/actions のコミット SHA で固定する（@main 不可）
-    uses: Fandhe-AI/actions/.github/workflows/update-external.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/update-external.yml@latest
     permissions:
       contents: read
     with:

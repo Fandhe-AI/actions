@@ -10,7 +10,7 @@ codex-review reusable workflow を呼び出す self wrapper）は、PR の base 
 `codex-review-runner-exception.md`）を参照し、本書は重複させずレビュー判定基準に絞る。
 
 本リポジトリは **Fandhe-AI Organization 全体の CI 基盤（Composite Action・reusable
-workflow）**であり、消費側リポジトリは SHA 固定で本リポジトリを参照する。ここでの欠陥・
+workflow）**であり、消費側リポジトリは `@latest` で本リポジトリを参照する。ここでの欠陥・
 権限過剰・インジェクション経路は組織内すべての CI へ伝播するため、通常のリポジトリより
 厳しい基準でレビューする。
 
@@ -28,9 +28,13 @@ workflow）**であり、消費側リポジトリは SHA 固定で本リポジ�
   `run:` 本文・workflow command 行へ直接埋め込まない。必ず `env:` 経由でシェル変数へ渡し
   `"${VAR}"` で参照する（`.claude/rules/security.md`）。ユーザー由来の値を `::notice::` 等の
   workflow command 行と同一行に展開する変更も P0
-- **アクション参照の SHA 固定（P0）**: 本リポジトリ内で `uses:` する外部 action・
-  reusable workflow はコミット SHA 固定とする（`@main` / タグ参照への緩和は P0）。
-  CLI・npm パッケージのバージョンも固定する（可動 latest の導入は P1）
+- **アクション参照（P0 / 対象は第三者のみ）**: 本リポジトリ内で `uses:` する
+  **第三者の** action・reusable workflow はコミット SHA 固定とする（`@main` / タグ参照への
+  緩和は P0）。CLI・npm パッケージのバージョンも固定する（可動 latest の導入は P1）。
+  **`Fandhe-AI/actions`（自リポジトリ）への参照は例外で、可変タグ `@latest` を使う**
+  （オーナー判断。pin の手動更新コストを避けるための組織方針であり、`@latest` への
+  統一を指摘しない）。`latest` は `.github/workflows/move-latest-tag.yml` が main への
+  push ごとに付け替える
 - **権限最小化（P0/P1）**: ジョブ・ステップの `permissions` は必要最小限を明示する。
   `write` 権限の追加・`GITHUB_TOKEN` で足りる箇所への PAT 要求・secrets の注入範囲拡大は
   根拠なしなら P0、根拠付きでも要精査（P1）

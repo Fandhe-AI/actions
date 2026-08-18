@@ -45,7 +45,7 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.SUBMODULE_PAT }}
-      - uses: Fandhe-AI/actions/submodule-update@<SHA> # main
+      - uses: Fandhe-AI/actions/submodule-update@latest
         with:
           token: ${{ secrets.SUBMODULE_PAT }}
 ```
@@ -53,7 +53,7 @@ jobs:
 #### 例2: submodule の追従ブランチを `develop` に指定
 
 ```yaml
-- uses: Fandhe-AI/actions/submodule-update@<SHA> # main
+- uses: Fandhe-AI/actions/submodule-update@latest
   with:
     token: ${{ secrets.SUBMODULE_PAT }}
     submodule-branch: develop
@@ -64,7 +64,7 @@ jobs:
 #### 例3: 特定 submodule のみを更新
 
 ```yaml
-- uses: Fandhe-AI/actions/submodule-update@<SHA> # main
+- uses: Fandhe-AI/actions/submodule-update@latest
   with:
     token: ${{ secrets.SUBMODULE_PAT }}
     submodule-path: vendor/shared-lib
@@ -83,7 +83,7 @@ variables で制御し、ワークフロー側はそれを渡すだけで済み�
 
 ```yaml
 - name: Update submodules and open PR
-  uses: Fandhe-AI/actions/submodule-update@<SHA> # main
+  uses: Fandhe-AI/actions/submodule-update@latest
   with:
     token: ${{ secrets.SUBMODULE_PAT }}
     base-branch: main
@@ -114,7 +114,7 @@ jobs:
         with:
           submodules: recursive
           token: ${{ steps.app-token.outputs.token }}
-      - uses: Fandhe-AI/actions/submodule-update@<SHA> # main
+      - uses: Fandhe-AI/actions/submodule-update@latest
         with:
           token: ${{ steps.app-token.outputs.token }}
           auto-merge: ${{ vars.SUBMODULE_AUTO_MERGE }}
@@ -184,18 +184,11 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 
 判定は **PR 単位**で行われ、今回 bump した submodule が**すべて** allowlist を通った時だけマージします。1 つでも対象外なら手動レビュー（マージしない）。allowlist 指定済みなのに bump path を特定できない場合も安全側で手動レビューになります。
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
-```bash
-# actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-
-# ワークフロー内の SHA を新しい値に置き換え
-```
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
 ## 注意事項
 

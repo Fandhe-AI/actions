@@ -11,7 +11,7 @@ name: Docs lint (reusable)
 #       permissions:
 #         contents: read
 #         pull-requests: write # reviewdog: true のときのみ必要
-#       uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@<SHA> # main
+#       uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@latest
 #       with:
 #         runner-label: self-hosted
 #         reviewdog: true

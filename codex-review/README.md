@@ -242,16 +242,15 @@ sudo -n true                          # → 失敗すること（sudo なし）
 bwrap --unshare-all --ro-bind / / true # → 成功すること（userns 許可）
 ```
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-```bash
-# 最新の main の SHA を確認
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-```
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
-wrapper の `uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA>` を更新する。
-同梱既定 prompt / schema は wrapper が固定した SHA と同一コミットから読まれるため、
-SHA 更新で workflow 本体と既定制御ファイルが常に一緒に切り替わる。
+wrapper は `uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@latest` を参照する。
+同梱既定 prompt / schema は `latest` が起動時に解決したコミット（`job.workflow_sha`）から
+読まれるため、workflow 本体と既定制御ファイルは常に同一コミットの組で切り替わる。
 
 `inputs` の追加・既定値変更が入った場合は `codex-review/templates/` の wrapper
 テンプレートも更新されるため、SHA 更新時にテンプレートとの差分も確認する。
@@ -283,5 +282,5 @@ SHA 更新で workflow 本体と既定制御ファイルが常に一緒に切り
 | `bwrap: No permissions to create a new namespace` | unprivileged user namespace が禁止されている | seccomp / AppArmor プロファイルで userns 作成を許可する（「runner 構築」参照） |
 | `@openai/codex` のインストールに失敗する | runner から `registry.npmjs.org` へ到達できない | runner のネットワーク・プロキシ設定を確認する |
 | 認証エラーでレビューが失敗する | `CODEX_HOME` の refresh token 失効、または `auth.json` が read-only マウント | ホストで `codex login --device-auth` を再実行し、read-write マウントであることを確認する |
-| `review_completed != true` の gate 失敗（summary に `Read-only file system` への言及） | read-only sandbox 下でモデルがファイルへのリダイレクト等の書き込みを試みた（sandbox の正常動作。イシュー #49 で同梱既定 prompt に書き込み禁止の明示と組み替え続行の指示を追加済み） | wrapper の `uses: ...@<SHA>` を対策込みの SHA へ追随する。カスタム prompt 利用時は同等の「実行環境の制約」節を自前の prompt へ反映する |
+| `review_completed != true` の gate 失敗（summary に `Read-only file system` への言及） | read-only sandbox 下でモデルがファイルへのリダイレクト等の書き込みを試みた（sandbox の正常動作。イシュー #49 で同梱既定 prompt に書き込み禁止の明示と組み替え続行の指示を追加済み） | wrapper は `@latest` を参照するため対策は自動で反映される。カスタム prompt 利用時は同等の「実行環境の制約」節を自前の prompt へ反映する |
 | public リポジトリでコメント投稿ジョブが runner 待ちになる | `post-feedback-runner-label` が既定値 `self-hosted` のまま | public 用テンプレートを使い `ubuntu-latest` を渡す |

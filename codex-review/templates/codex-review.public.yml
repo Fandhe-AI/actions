@@ -1,5 +1,5 @@
 # public リポジトリ向け wrapper テンプレート。
-# 呼び出し側リポジトリの .github/workflows/codex-review.yml へコピーし、<SHA> を差し替える。
+# 呼び出し側リポジトリの .github/workflows/codex-review.yml へコピーして使う。
 # 導入手順は Fandhe-AI/actions の codex-review/README.md「セットアップ」を参照。
 name: Codex PR review
 
@@ -18,8 +18,7 @@ permissions:
 
 jobs:
   codex-review:
-    # <SHA> は Fandhe-AI/actions のコミット SHA で固定する（@main 不可）
-    uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@latest
     permissions:
       contents: read
       pull-requests: write

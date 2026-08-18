@@ -1,0 +1,70 @@
+# 可変タグ `latest` を main の最新コミットへ付け替える。
+#
+# 消費側リポジトリは本リポジトリを `@latest` で参照する（AGENTS.md「アクション参照」）。
+# タグを動かす主体はこの workflow だけであり、これが止まると `latest` が古いコミットに
+# 据え置かれたまま気付かれない（= SHA pin と同じ状態へ静かに退行する）ため、判定不能な
+# 応答は green に倒さず job の失敗として顕在化させる。
+#
+# GITHUB_TOKEN による ref の push は他の workflow を起動しないため、この付け替えが
+# 再帰的に本 workflow を呼ぶことはない。
+name: Move latest tag
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: move-latest-tag
+  cancel-in-progress: false
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Move `latest` to the branch tip
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 付け替え先はイベント時点の github.sha ではなく、実行時点のブランチ先端を解決して
+          # 使う（収束性）。github.sha 決め打ちだと、短時間に複数 push が並んだとき
+          # concurrency group 内の実行順がコミット順と一致せず、古い SHA の run が後から
+          # 完走して latest が巻き戻り得る（PR #90 codex P1）。実行時解決なら、どの run が
+          # 最後に走っても latest は必ずその時点のブランチ先端に一致する。巻き戻りの余地が
+          # あるのは同 group が run を直列化しない場合だけで、それは構成上排除している。
+          SHA=$(gh api "repos/${REPO}/git/ref/heads/${BRANCH}" --jq '.object.sha')
+          # gh api はエラーも stdout に出すため、存在判定は終了コードではなく HTTP status で
+          # 行う（403 と 404 を取り違えると、既存タグがあるのに新規作成しに行って失敗する）。
+          # `|| true` が必須: set -e / pipefail 下では 404 応答（gh api の非ゼロ終了）で
+          # 代入自体がスクリプトを打ち切り、タグ新規作成の分岐へ到達できない。
+          code=$(gh api -i "repos/${REPO}/git/ref/tags/latest" 2>/dev/null | awk 'NR==1{print $2}' || true)
+          case "${code}" in
+            200)
+              gh api --method PATCH "repos/${REPO}/git/refs/tags/latest" \
+                -f "sha=${SHA}" -F force=true --jq '.object.sha'
+              ;;
+            404)
+              gh api --method POST "repos/${REPO}/git/refs" \
+                -f 'ref=refs/tags/latest' -f "sha=${SHA}" --jq '.object.sha'
+              ;;
+            *)
+              echo "::error::latest タグの存在判定に失敗した (HTTP ${code:-?})"
+              exit 1
+              ;;
+          esac
+          # concurrency group が run を直列化するため、この検証の間に別 run が tag を
+          # 動かすことはない（期待値はこの run が解決したブランチ先端）。
+          resolved=$(gh api "repos/${REPO}/git/ref/tags/latest" --jq '.object.sha')
+          if [ "${resolved}" != "${SHA}" ]; then
+            echo "::error::付け替え後の latest が ${resolved} で、期待値 ${SHA} と一致しない"
+            exit 1
+          fi
+          echo "latest -> ${resolved}"

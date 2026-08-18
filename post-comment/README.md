@@ -41,7 +41,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Post PR comment
-        uses: Fandhe-AI/actions/post-comment@<SHA> # main
+        uses: Fandhe-AI/actions/post-comment@latest
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: 'PR を作成いただきありがとうございます！'
@@ -64,7 +64,7 @@ jobs:
       issues: write
     steps:
       - name: Post welcome comment
-        uses: Fandhe-AI/actions/post-comment@<SHA> # main
+        uses: Fandhe-AI/actions/post-comment@latest
         with:
           issue-number: ${{ github.event.issue.number }}
           body: 'Issue を作成いただきありがとうございます！'
@@ -75,7 +75,7 @@ jobs:
 
 ```yaml
 - name: Notify upstream
-  uses: Fandhe-AI/actions/post-comment@<SHA> # main
+  uses: Fandhe-AI/actions/post-comment@latest
   with:
     issue-number: '42'
     body: 'Downstream の修正が完了しました。'
@@ -92,18 +92,11 @@ jobs:
 | `token` | Yes | - | コメント投稿に使用するトークン（PAT または GITHUB_TOKEN） |
 | `repository` | No | `$GITHUB_REPOSITORY` | 対象リポジトリ（OWNER/REPO 形式） |
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
-```bash
-# actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-
-# ワークフロー内の SHA を新しい値に置き換え
-```
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
 ## 注意事項
 

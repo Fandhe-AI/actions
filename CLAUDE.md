@@ -47,22 +47,16 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 
 ## 利用側の参照方法
 
-セキュリティのためコミット SHA で固定（`@main` 不可）:
+可変タグ `@latest` で参照する（`latest` は main へ自動追従。SHA 固定・`@main` は使わない）:
 
 ```yaml
-uses: Fandhe-AI/actions/post-comment@<SHA> # main
+uses: Fandhe-AI/actions/post-comment@latest
 ```
 
-reusable workflow も同様に SHA 固定で参照する:
+reusable workflow も同様に `@latest` で参照する:
 
 ```yaml
-uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
-```
-
-最新 SHA の取得（本リポジトリは public のため、未認証の GitHub API でも取得できる）:
-
-```bash
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
+uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@latest
 ```
 
 ## README 規約
@@ -73,7 +67,7 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
 2. 前提条件
 3. セットアップ（Secrets 登録 → ワークフロー例）
 4. Inputs テーブル（名前 / 必須 / デフォルト / 説明）
-5. SHA の更新方法
+5. 参照バージョン（`@latest`）
 6. 注意事項
 
 ドキュメントは日本語で記述する。

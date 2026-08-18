@@ -29,32 +29,29 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 
 ## 使い方
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定して参照します：
+本リポジトリの参照は可変タグ `@latest` に統一します。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、利用側で参照を更新する作業は不要です：
 
 ```yaml
 steps:
-  - uses: Fandhe-AI/actions/post-comment@<SHA> # main
+  - uses: Fandhe-AI/actions/post-comment@latest
     with:
       issue-number: ${{ github.event.issue.number }}
       body: 'コメント本文'
       token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-reusable workflow（`codex-review` / `pages-deploy`）も同様に SHA で固定します：
+reusable workflow（`codex-review` / `pages-deploy`）も同様に `@latest` で参照します：
 
 ```yaml
 jobs:
   deploy:
-    uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@latest
 ```
 
-最新の SHA は以下で取得できます（本リポジトリは public のため、未認証の GitHub API でも取得できます）：
-
-```bash
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-```
-
-タグ・ブランチ名（`@main` / `@v1`）での参照は可変であり、参照先が差し替わりうるため使用しません。
+`@latest` は可変であり、main の更新が即座に全利用側へ反映されます（SHA 固定が持っていた
+変更の隔離は失われます）。これは pin の手動更新コストを避けるための組織方針としての選択です。
+**第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定します。**
 
 ## 前提条件
 

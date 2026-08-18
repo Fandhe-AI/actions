@@ -41,7 +41,7 @@ permissions:
 ```yaml
 - name: audit-triage の Issue 起票
   if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-  uses: Fandhe-AI/actions/idempotent-issue@<SHA> # main
+  uses: Fandhe-AI/actions/idempotent-issue@latest
   with:
     label: audit-triage
     label-color: B60205
@@ -59,7 +59,7 @@ permissions:
 ```yaml
 - name: bench-regression の Issue 起票
   if: always() && steps.bench.outcome == 'success' && steps.bench.outputs.status != '0'
-  uses: Fandhe-AI/actions/idempotent-issue@<SHA> # main
+  uses: Fandhe-AI/actions/idempotent-issue@latest
   with:
     label: bench-regression
     label-color: B60205
@@ -75,7 +75,7 @@ permissions:
 ```yaml
 - name: Issue 起票（冪等）
   id: issue
-  uses: Fandhe-AI/actions/idempotent-issue@<SHA> # main
+  uses: Fandhe-AI/actions/idempotent-issue@latest
   with:
     label: my-alert
     search-query: 'my-alert: 検知'
@@ -114,18 +114,11 @@ permissions:
 | `issue-number` | 新規起票した Issue、または検知した既存 open Issue の番号 |
 | `issue-url` | 新規起票した Issue、または検知した既存 open Issue の URL |
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
-```bash
-# actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-
-# ワークフロー内の SHA を新しい値に置き換え
-```
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
 ## 注意事項
 

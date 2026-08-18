@@ -58,7 +58,7 @@ jobs:
   lint-docs:
     permissions:
       contents: read
-    uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@latest
 ```
 
 ### 2. reviewdog あり（PR にインラインコメント。self-hosted runner）
@@ -70,7 +70,7 @@ jobs:
       contents: read
       # reviewdog: true のときのみ必要（PR へのコメント投稿に使う）
       pull-requests: write
-    uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@latest
     with:
       runner-label: self-hosted
       reviewdog: true
@@ -93,14 +93,14 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@latest
     with:
       # push では commitlint / reviewdog を無効化する
       commitlint: ${{ github.event_name == 'pull_request' }}
       reviewdog: ${{ github.event_name == 'pull_request' }}
 ```
 
-`<SHA>` は本リポジトリのコミット SHA で固定する（`@main` 不可。更新方法は後述）。
+参照は `@latest` のまま使う（`latest` は main へ自動追従する。後述の「参照バージョン」節）。
 
 ## Inputs
 
@@ -147,14 +147,11 @@ jobs:
 | `commitlint-config-version` | - | `21.2.0` | `@commitlint/config-conventional` の固定バージョン |
 | `commitlint-extends` | - | `@commitlint/config-conventional` | `--extends` に渡す共有設定。空にすると渡さない |
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-```bash
-# 最新の main の SHA を確認
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-```
-
-呼び出し側 wrapper の `uses: Fandhe-AI/actions/.github/workflows/lint-docs.yml@<SHA>` を更新する。
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
 本 workflow が内部で使う外部 action の SHA を更新する場合は、タグの実コミット SHA を
 API で解決して使う（値をでっち上げない）:

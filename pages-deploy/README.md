@@ -90,7 +90,7 @@ jobs:
     permissions:
       pages: write
       id-token: write
-    uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@latest
     with:
       # upload-artifact は path 直下の内容を artifact ルートへ置くため、
       # 上記のように dist ディレクトリ自体を path に指定した場合は "." を指定する
@@ -108,14 +108,11 @@ jobs:
 | `runner-label` | - | `self-hosted` | deploy ジョブを実行する runner ラベル |
 | `timeout-minutes` | - | `10` | deploy ジョブの timeout（分） |
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-```bash
-# 最新の main の SHA を確認
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-```
-
-呼び出し側 wrapper の `uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA>` を更新する。
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
 本 workflow が内部で使う外部 action（`download-artifact` / `upload-pages-artifact` /
 `deploy-pages`）の SHA を更新する場合は、タグの実コミット SHA を API で解決して使う
