@@ -94,12 +94,12 @@ jobs:
     # 共通側ジョブが必要とする権限をここでも付与する
     permissions:
       contents: read
-    uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@latest
     with:
       runner-label: self-hosted
 ```
 
-`<SHA>` は本リポジトリのコミット SHA で固定する（`@main` 不可。SHA の更新方法は後述）。
+参照は `@latest` のまま使う（`latest` は main へ自動追従する。後述の「参照バージョン」節）。
 
 ### public リポジトリ（GitHub ホステッド）から呼ぶ場合
 
@@ -108,7 +108,7 @@ jobs:
   rust-ci:
     permissions:
       contents: read
-    uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@latest
     with:
       runner-label: ubuntu-latest
       # ホステッド runner は毎回まっさらなため cache が効く
@@ -151,23 +151,16 @@ with:
 2 リポジトリでコマンドに差分が無く、`run:` 内での非クォート展開（単語分割）という
 シェル注入面だけが増えるため。
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-```bash
-# 最新の main の SHA を確認
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-```
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
-呼び出し側の `uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@<SHA>` を更新する。
-
-本 workflow が内部で参照する **本リポジトリ内の action**
-（`rust-toolchain-setup`）は、相対参照
-（`uses: ./rust-toolchain-setup`）が**呼び出し側リポジトリのチェックアウト**を指してしまう
-ため使えず、`Fandhe-AI/actions/<action>@<SHA> # <バージョン>` 形式で固定している
-（`# main` のような可動参照ラベルはコメントにも書かない）。参照先の action を更新した
-際は `.github/workflows/rust-base-ci.yml` 内の各 SHA を手動で追随させ、**呼び出し側も
-本 workflow の新しい SHA へ更新する**（内部 pin を直しただけでは、古い SHA で本 workflow
-を呼んでいるリポジトリには反映されない）。
+本 workflow が内部で参照する **本リポジトリ内の action**（`rust-toolchain-setup`）は、
+相対参照（`uses: ./rust-toolchain-setup`）が**呼び出し側リポジトリのチェックアウト**を
+指してしまうため使えず、`Fandhe-AI/actions/<action>@latest` 形式で参照している。
+内部参照・呼び出し側の参照とも `latest` が main へ自動追従するため、更新作業は発生しない。
 
 外部 action（`actions/checkout` / `actions/cache`）の SHA を更新する場合は、タグの実コミット
 SHA を API で解決して使う（値をでっち上げない）:

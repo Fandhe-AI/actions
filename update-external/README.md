@@ -27,7 +27,7 @@ reusable 化により、下流が持つのは wrapper 1 ファイルだけにな
 
 1. [`templates/update-external.yml`](./templates/update-external.yml) を呼び出し側リポジトリの
    `.github/workflows/update-external.yml` へコピーする
-2. `<SHA>` を本リポジトリのコミット SHA へ差し替える（`@main` 参照は不可）
+2. 参照は `@latest` のまま使う（`latest` は main へ自動追従するため差し替え不要）
 3. リポジトリ固有の設定（`runner-json`・`enable-submodule`・`enable-skills`）を調整する。
    既定でよい行は削除してよい
 4. 書き込み権限付き PAT を Secrets へ登録する（`SUBMODULE_PAT` / `SKILLS_PAT`。
@@ -144,20 +144,20 @@ fail-open の抑止はリポジトリ固有の事情ではなく、集中管理�
 | `.gitmodules` を持たない | `actions` 本体 | 存在判定ステップが自動 skip（設定不要） |
 | auto-merge の ON/OFF | 組織変数で集中管理 | `submodule-auto-merge` / `skills-auto-merge` |
 
-## pin SHA の更新（未解決の運用課題）
+## 参照バージョン（`@latest`）
 
-wrapper の `@<SHA>` は手動更新が必要である。本リポジトリはタグ・リリースを 1 件も公開して
-いないため（2026-08-17 実測: `GET /repos/Fandhe-AI/actions/tags` → 0 件、`/releases` → 0 件）、
-Dependabot の `github-actions` エコシステムが解決先バージョンを持てず、SHA pin を自動更新
-できない。
+wrapper は `uses: Fandhe-AI/actions/.github/workflows/update-external.yml@latest` を参照する。
+`latest` は main への push ごとに本リポジトリの `.github/workflows/move-latest-tag.yml` が
+付け替えるため、呼び出し側での更新作業は発生しない（2026-08-18・オーナー判断で SHA pin から
+移行）。
 
-したがって現時点で reusable 化が解消したのは「**強化内容の配布**」であり、「pin SHA の
-配布」は残っている。ただし更新対象は 600 行超のテンプレート全体から wrapper の 1 行へ縮む。
+移行前は wrapper の `@<SHA>` を手で更新する必要があり、タグ・リリースが 1 件も無いため
+Dependabot にも任せられなかった。`latest` の導入でこの運用課題は解消している。
 
-恒久対応の候補（未着手）:
-
-- 本リポジトリでタグ（`v1` 等）を公開し、Dependabot に SHA 更新を任せる
-- 上流に pin SHA 更新 PR を各リポジトリへ開くジョブを設ける（`workflows` スコープ付き PAT が必要）
+トレードオフとして、main の更新は次回起動時に全呼び出し側へ即時反映される。upstream の
+`workflow_call` inputs を破壊的に変更すると全リポジトリの同期ジョブが起動時に失敗する
+（`Invalid input, <name> is not defined in the referenced workflow`）ため、inputs の削除・
+改名は互換を保って行う。
 
 ## 移行手順（既存の update-external.yml を持つリポジトリ）
 

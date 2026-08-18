@@ -11,7 +11,7 @@ name: GitHub Pages deploy (reusable)
 #       permissions:
 #         pages: write
 #         id-token: write
-#       uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@<SHA> # main
+#       uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@latest
 #       with:
 #         dist-dir: "."
 #

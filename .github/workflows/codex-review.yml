@@ -7,7 +7,7 @@ name: Codex PR review (reusable)
 #
 #   jobs:
 #     codex-review:
-#       uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA> # main
+#       uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@latest
 #
 # 設計の要点（詳細な根拠は各ステップのコメント）:
 # - openai/codex-action は使わない: 同 action は openai-api-key 未指定だと Responses API proxy
@@ -310,7 +310,7 @@ jobs:
 
       # 同梱既定 prompt / schema のフォールバック元。呼び出された workflow ファイル自身を
       # 定義するリポジトリ・コミット（job.workflow_repository / job.workflow_sha。呼び出し側
-      # wrapper が `uses: ...@<SHA>` で固定したその SHA）を checkout し、PR が改変できない
+      # wrapper の `uses: ...@latest` が起動時に解決した SHA）を checkout し、PR が改変できない
       # 信頼済み参照から読む。リポジトリ名を導出するため fork からの利用でも書き換え不要。
       # checkout 先は直前の PR checkout 内のパスになるため、PR が同名パスを symlink 化して
       # runner 上の別ディレクトリへ書かせる経路を塞ぐ目的で、先に rm -rf で unlink して

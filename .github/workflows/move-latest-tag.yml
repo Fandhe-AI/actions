@@ -1,0 +1,58 @@
+# 可変タグ `latest` を main の最新コミットへ付け替える。
+#
+# 消費側リポジトリは本リポジトリを `@latest` で参照する（AGENTS.md「アクション参照」）。
+# タグを動かす主体はこの workflow だけであり、これが止まると `latest` が古いコミットに
+# 据え置かれたまま気付かれない（= SHA pin と同じ状態へ静かに退行する）ため、判定不能な
+# 応答は green に倒さず job の失敗として顕在化させる。
+#
+# GITHUB_TOKEN による ref の push は他の workflow を起動しないため、この付け替えが
+# 再帰的に本 workflow を呼ぶことはない。
+name: Move latest tag
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: move-latest-tag
+  cancel-in-progress: false
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Move `latest` to the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # gh api はエラーも stdout に出すため、存在判定は終了コードではなく HTTP status で
+          # 行う（403 と 404 を取り違えると、既存タグがあるのに新規作成しに行って失敗する）。
+          code=$(gh api -i "repos/${REPO}/git/ref/tags/latest" 2>/dev/null | awk 'NR==1{print $2}')
+          case "${code}" in
+            200)
+              gh api --method PATCH "repos/${REPO}/git/refs/tags/latest" \
+                -f "sha=${SHA}" -F force=true --jq '.object.sha'
+              ;;
+            404)
+              gh api --method POST "repos/${REPO}/git/refs" \
+                -f 'ref=refs/tags/latest' -f "sha=${SHA}" --jq '.object.sha'
+              ;;
+            *)
+              echo "::error::latest タグの存在判定に失敗した (HTTP ${code:-?})"
+              exit 1
+              ;;
+          esac
+          resolved=$(gh api "repos/${REPO}/git/ref/tags/latest" --jq '.object.sha')
+          if [ "${resolved}" != "${SHA}" ]; then
+            echo "::error::付け替え後の latest が ${resolved} で、期待値 ${SHA} と一致しない"
+            exit 1
+          fi
+          echo "latest -> ${resolved}"

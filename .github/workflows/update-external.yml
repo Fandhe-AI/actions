@@ -7,7 +7,7 @@ name: Update external sources (reusable)
 #
 #   jobs:
 #     update-external:
-#       uses: Fandhe-AI/actions/.github/workflows/update-external.yml@<SHA> # main
+#       uses: Fandhe-AI/actions/.github/workflows/update-external.yml@latest
 #       secrets:
 #         SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
 #         SKILLS_PAT: ${{ secrets.SKILLS_PAT }}
@@ -64,17 +64,16 @@ name: Update external sources (reusable)
 #     直接 commit 48b55a0... を指しており一致。すなわち正規リリース v6.4.0 の
 #     タグ pin。
 #
-#   Fandhe-AI/actions@fed9c07d98367f77e5e2b63bca38843f46feee96
-#     `GET /repos/Fandhe-AI/actions/compare/fed9c07...main` → status "ahead",
-#     ahead_by=7, behind_by=0。すなわち fed9c07 は main の祖先。タグ未公開のため
-#     main 追従の SHA pin となる。本ファイルは同一リポジトリ内にあるが、composite
-#     action の参照は移設元と同じく SHA 固定のままとする（reusable workflow 本体の
-#     更新と composite action の更新タイミングを分離するため）。
+#   Fandhe-AI/actions@latest
+#     自リポジトリの composite action は可変タグ `latest` で参照する（2026-08-18・
+#     オーナー判断で SHA pin から移行）。`latest` は main への push ごとに
+#     `.github/workflows/move-latest-tag.yml` が付け替えるため、reusable workflow 本体と
+#     composite action の更新タイミングは分離されず、常に同じ main の内容が使われる。
 #
 # 上記 2 つの actions/* はブランチ追従ではなくリリースタグ pin であるため、
 # uses 行末の注記は追従元タグ（`# v6.0.3` / `# v6.4.0`）とする。ここへ `# main` と
 # 書くと「main の先頭を追いかけて SHA を更新する」という誤った更新方針を示唆する。
-# `# main` を付けるのはタグ未公開で実際に main 追従となる Fandhe-AI/actions の 2 行のみ。
+# Fandhe-AI/actions への参照は SHA ではなく `@latest` のため注記自体を付けない。
 # --------------------------------------------------------------------------
 
 on:
@@ -478,10 +477,10 @@ jobs:
 
       - name: Update submodules and open PR
         if: steps.detect.outputs.present == 'true'
-        # Fandhe-AI/actions はタグ未公開のため main 追従の最新コミット SHA に固定
+        # 自リポジトリの composite action は可変タグ latest（main へ自動追従）で参照する
         # する（fed9c07 が main の祖先であることを compare API で確認済み。
         # 検証記録はファイル冒頭）。行末の `# main` が追従元ブランチを示す。
-        uses: Fandhe-AI/actions/submodule-update@fed9c07d98367f77e5e2b63bca38843f46feee96 # main
+        uses: Fandhe-AI/actions/submodule-update@latest
         with:
           token: ${{ secrets.SUBMODULE_PAT }}
           base-branch: ${{ inputs.base-branch }}
@@ -721,10 +720,10 @@ jobs:
           node-version: '24.19.0'
 
       - name: Update skills and open PR
-        # Fandhe-AI/actions はタグ未公開のため main 追従の最新コミット SHA に固定
+        # 自リポジトリの composite action は可変タグ latest（main へ自動追従）で参照する
         # する（fed9c07 が main の祖先であることを compare API で確認済み。
         # 検証記録はファイル冒頭）。行末の `# main` が追従元ブランチを示す。
-        uses: Fandhe-AI/actions/skills-update@fed9c07d98367f77e5e2b63bca38843f46feee96 # main
+        uses: Fandhe-AI/actions/skills-update@latest
         with:
           token: ${{ secrets.SKILLS_PAT || secrets.SUBMODULE_PAT }}
           # source-token 省略時は token（書き込み PAT）が流用され、`npx skills` 実行

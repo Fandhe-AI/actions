@@ -32,7 +32,7 @@ Secrets は不要です。ワークフローのステップに以下を追加し
 ```yaml
 steps:
   - name: Install wasm-pack (pinned + checksum-verified)
-    uses: Fandhe-AI/actions/wasm-tool-install@<SHA> # main
+    uses: Fandhe-AI/actions/wasm-tool-install@latest
     with:
       tool: wasm-pack
       version: '0.13.1'
@@ -53,7 +53,7 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 # バージョンは Cargo.lock の wasm-bindgen と一致させること
 # （crates/dist-server/build.rs の expected_wasm_bindgen_version 参照）。
 - name: Install wasm-bindgen-cli (pinned + checksum-verified, atomic install)
-  uses: Fandhe-AI/actions/wasm-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/wasm-tool-install@latest
   with:
     tool: wasm-bindgen
     version: '0.2.126'
@@ -61,7 +61,7 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 
 # browser-test / perf-harness ジョブ: wasm-pack
 - name: Install wasm-pack (pinned + checksum-verified)
-  uses: Fandhe-AI/actions/wasm-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/wasm-tool-install@latest
   with:
     tool: wasm-pack
     version: '0.13.1'
@@ -73,7 +73,7 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 ```yaml
 - name: Install wasm-pack (pinned + checksum-verified)
   if: steps.check.outputs.exists == 'true'
-  uses: Fandhe-AI/actions/wasm-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/wasm-tool-install@latest
   with:
     tool: wasm-pack
     version: '0.13.1'
@@ -85,7 +85,7 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 ```yaml
 - name: Install wasm-bindgen-cli
   id: wb
-  uses: Fandhe-AI/actions/wasm-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/wasm-tool-install@latest
   with:
     tool: wasm-bindgen
     version: '0.2.126'
@@ -143,14 +143,6 @@ curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-
 
 セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
 `actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
-```bash
-# actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-
-# ワークフロー内の SHA を新しい値に置き換え
-```
 
 ## 注意事項
 

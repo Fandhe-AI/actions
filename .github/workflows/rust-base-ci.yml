@@ -8,7 +8,7 @@ name: Rust base CI (reusable)
 #     rust-ci:
 #       permissions:
 #         contents: read
-#       uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@<SHA> # main
+#       uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@latest
 #       with:
 #         runner-label: self-hosted
 #
@@ -160,7 +160,7 @@ jobs:
       # （README の「SHA の更新方法」参照）。
       - name: Setup Rust toolchain (rustfmt)
         if: steps.detect.outputs.has_cargo == 'true'
-        uses: Fandhe-AI/actions/rust-toolchain-setup@749afc98a179a545bc1bdaab68cd07b6f6659970 # v1.1.0
+        uses: Fandhe-AI/actions/rust-toolchain-setup@latest
         with:
           components: rustfmt
 
@@ -213,7 +213,7 @@ jobs:
 
       - name: Setup Rust toolchain (clippy)
         if: steps.detect.outputs.has_cargo == 'true'
-        uses: Fandhe-AI/actions/rust-toolchain-setup@749afc98a179a545bc1bdaab68cd07b6f6659970 # v1.1.0
+        uses: Fandhe-AI/actions/rust-toolchain-setup@latest
         with:
           components: clippy
 
@@ -266,7 +266,7 @@ jobs:
 
       - name: Setup Rust toolchain
         if: steps.detect.outputs.has_cargo == 'true'
-        uses: Fandhe-AI/actions/rust-toolchain-setup@749afc98a179a545bc1bdaab68cd07b6f6659970 # v1.1.0
+        uses: Fandhe-AI/actions/rust-toolchain-setup@latest
 
       - name: cargo test --workspace --all-features
         if: steps.detect.outputs.has_cargo == 'true'
@@ -355,7 +355,7 @@ jobs:
 
       - name: Setup Rust toolchain
         if: steps.detect.outputs.has_deny == 'true'
-        uses: Fandhe-AI/actions/rust-toolchain-setup@749afc98a179a545bc1bdaab68cd07b6f6659970 # v1.1.0
+        uses: Fandhe-AI/actions/rust-toolchain-setup@latest
 
       # 移行元 ci.yml の `cargo install cargo-deny --locked`（バージョン非固定）を
       # バージョン固定・冪等な導入へ置き換える（導入済みなら何もしない）。

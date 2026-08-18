@@ -43,7 +43,7 @@ workflow からは検証できないため、runner 構築・org 設定の側で
 
 - wrapper で `post-feedback-runner-label: ubuntu-latest` を**明示的に渡す**（次節）
 - `CODEX_HOME_DIR` を org または当該リポジトリの Actions variable に設定する
-- `uses:` をコミット SHA で固定する（`@main` 不可）
+- `uses:` は `@latest` で参照する（`latest` は main へ自動追従する）
 
 ## 2. public リポジトリ向け wrapper
 
@@ -71,7 +71,7 @@ permissions:
 
 jobs:
   codex-review:
-    uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@<SHA> # main
+    uses: Fandhe-AI/actions/.github/workflows/codex-review.yml@latest
     permissions:
       contents: read
       pull-requests: write
@@ -83,7 +83,7 @@ jobs:
       # 「修正」すると CODEX_HOME が存在せず認証が壊れ、例外の対象外にもなる
 ```
 
-`<SHA>` は本リポジトリのコミット SHA で固定する（取得方法は
+参照は `@latest` のまま使う（`latest` は main へ自動追従する。詳細は
 [ルート README](../README.md#使い方)）。
 
 ジョブごとの runner の対応:

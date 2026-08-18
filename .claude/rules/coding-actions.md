@@ -25,5 +25,6 @@
 
 ## 利用側の参照
 
-- セキュリティのため利用側は `@main` ではなく**コミット SHA で固定**して参照する
+- 利用側は `Fandhe-AI/actions` を**可変タグ `@latest`** で参照する（`latest` は main へ
+  自動追従する）。第三者の action は従来どおり**コミット SHA で固定**する
 - 既存アクション（`submodule-update/`・`skills-update/`）の構造・命名に揃える

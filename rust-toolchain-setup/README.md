@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@<SHA> # v6
 
       - name: Setup Rust toolchain
-        uses: Fandhe-AI/actions/rust-toolchain-setup@<SHA> # main
+        uses: Fandhe-AI/actions/rust-toolchain-setup@latest
 
       - name: cargo test
         run: cargo test --workspace --all-features
@@ -82,7 +82,7 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 
 ```yaml
       - name: Setup Rust toolchain
-        uses: Fandhe-AI/actions/rust-toolchain-setup@<SHA> # main
+        uses: Fandhe-AI/actions/rust-toolchain-setup@latest
         with:
           components: llvm-tools-preview # coverage ジョブのみ。他ジョブでは省略
 ```
@@ -94,18 +94,11 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 | `components` | No | `''` | 追加でインストールする rustup コンポーネント（カンマ区切り。例: `llvm-tools-preview`）。`rust-toolchain.toml` の `components` に列挙済みのものは指定不要 |
 | `allow-network-install` | No | `'false'` | rustup 未導入・破損時にネットワークから rustup-init を取得して導入することを許可する。既定は fail-closed。使い捨ての GitHub ホストランナーや、供給網リスクを許容できる環境でのみ `'true'` にする |
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定する。
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新する:
-
-```bash
-# actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-
-# ワークフロー内の SHA を新しい値に置き換え
-```
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
 ## 注意事項
 

@@ -22,7 +22,7 @@ Secrets は不要です。ワークフローのステップに以下を追加し
 ```yaml
 steps:
   - name: Ensure cargo-nextest 0.9.137
-    uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+    uses: Fandhe-AI/actions/cargo-tool-install@latest
     with:
       tool: cargo-nextest
       version: '0.9.137'
@@ -40,44 +40,44 @@ fandhe-backend の CI（ci.yml / release.yml / bench-schedule.yml）にある
 # binary-name 省略時は tool と同名のバイナリとみなし、`cargo-` 始まりは
 # 自動的に `cargo <sub> --version` 形式でバージョン確認する。
 - name: Ensure cargo-nextest 0.9.137
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: cargo-nextest
     version: '0.9.137'
 
 - name: Ensure cargo-deny 0.19.8
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: cargo-deny
     version: '0.19.8'
 
 - name: Ensure cargo-audit 0.22.2
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: cargo-audit
     version: '0.22.2'
 
 - name: Ensure cargo-geiger 0.13.0
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: cargo-geiger
     version: '0.13.0'
 
 - name: Ensure cargo-llvm-cov 0.8.7
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: cargo-llvm-cov
     version: '0.8.7'
 
 - name: Ensure cargo-fuzz 0.13.2
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: cargo-fuzz
     version: '0.13.2'
 
 # スタンドアロンバイナリ型（コマンド名 = crate 名）
 - name: Ensure oha 1.15.0
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: oha
     version: '1.15.0'
@@ -88,7 +88,7 @@ crate 名とコマンド名が異なるツールは `binary-name` で明示し�
 ```yaml
 # 例: crate 名 ripgrep のコマンド名は rg
 - name: Ensure ripgrep 14.1.1
-  uses: Fandhe-AI/actions/cargo-tool-install@<SHA> # main
+  uses: Fandhe-AI/actions/cargo-tool-install@latest
   with:
     tool: ripgrep
     version: '14.1.1'
@@ -103,18 +103,13 @@ crate 名とコマンド名が異なるツールは `binary-name` で明示し�
 | `version` | Yes | - | 固定するバージョン（semver 形式、厳密一致で判定） |
 | `binary-name` | No | `tool` と同じ | 導入後に呼び出すコマンド名。`cargo-` 始まりはサブコマンド形式（`cargo <name> --version`）で確認する |
 
-## SHA の更新方法
+## 参照バージョン（`@latest`）
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
+`Fandhe-AI/actions` は可変タグ `@latest` で参照する。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
+第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
+
 `actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
-```bash
-# actions リポジトリの main 最新コミット SHA を取得
-# （本リポジトリは public のため、未認証の GitHub API でも取得できる）
-gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
-
-# ワークフロー内の SHA を新しい値に置き換え
-```
 
 ## 注意事項
 
