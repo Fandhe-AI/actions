@@ -37,10 +37,13 @@ name: Rust base CI (reusable)
 # - concurrency は reusable workflow のトップレベルでは機能しないため呼び出し側で設定する
 #   （README のセットアップ例参照）
 #
-# 前提: 呼び出し側リポジトリに rust-toolchain.toml が存在すること。rust-toolchain-setup は
-# rustup を `--default-toolchain none` で導入し rust-toolchain.toml を単一真実源とするため、
-# 「rustup 未導入かつ rust-toolchain.toml 不在」の runner では既定ツールチェーンが決まらない
-# （移行元 ci.yml の `--default-toolchain stable` からの挙動差分。README の前提条件参照）。
+# 前提1: runner に正常動作する rustup が導入済みであること。rust-toolchain-setup v1.1.0（#86）
+# 以降、rustup が未導入・破損している場合はネットワーク導入せず fail-closed でエラー終了する。
+# GitHub ホステッドランナーは rustup 同梱。self-hosted は runner イメージ側で用意する。
+# 前提2: 呼び出し側リポジトリに rust-toolchain.toml が存在すること。rust-toolchain-setup は
+# rust-toolchain.toml を単一真実源として toolchain を同期するため、不在の runner では
+# 既定ツールチェーンが決まらない（移行元 ci.yml の `--default-toolchain stable` からの
+# 挙動差分。README の前提条件参照）。
 
 on:
   workflow_call:
