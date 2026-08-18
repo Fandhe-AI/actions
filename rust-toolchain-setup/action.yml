@@ -1,7 +1,7 @@
 name: Rust Toolchain Setup
 description: >-
-  self-hosted runner 上で rustup を自己修復（未導入・破損時のみ非対話インストール）し、
-  リポジトリの rust-toolchain.toml にツールチェーンを同期する
+  runner の rustup を検証し、リポジトリの rust-toolchain.toml にツールチェーンを同期する。
+  rustup 未導入・破損時は既定で fail-closed（allow-network-install で導入を opt-in できる）
 
 inputs:
   components:
@@ -10,17 +10,35 @@ inputs:
       rust-toolchain.toml の components に既に列挙済みのものは指定不要
     required: false
     default: ''
+  allow-network-install:
+    description: >-
+      rustup が未導入・破損している場合に、ネットワークから rustup-init を取得して
+      導入することを許可する（'true' で有効）。既定は 'false' = fail-closed。
+
+      既定を fail-closed にしている理由: 導入は `curl https://sh.rustup.rs | sh` で行われ、
+      action 自体を commit SHA で pin しても取得されるスクリプトの内容は固定・検証されない。
+      永続 self-hosted runner の root ジョブ（Docker socket を持つ構成もある）で
+      未 pin のリモートコードが実行される供給網経路（OWASP A08 相当）になるため、
+      既定では踏まず、runner 側の不備として明示的に失敗させる。
+
+      恒久対応は runner イメージへ rustup を焼き込むこと。使い捨ての GitHub ホストランナーや、
+      供給網リスクを許容できる環境でのみ 'true' にする。
+    required: false
+    default: 'false'
 
 runs:
   using: composite
   steps:
-    # self-hosted runner の永続環境に rustup が未導入、または残骸だけが残って
-    # 実行不能（破損）な場合に備え、後続の「Sync toolchain」の前提
-    # （rustup show の実行可否）を自己修復する。健全な導入済み環境では
-    # 何もしない（冪等・追加コストほぼゼロ）。導入時は非対話・HTTPS 検証込みで
-    # 取得し、既定ツールチェーンは rust-toolchain.toml に委ねる（none 指定）。
+    # 後続の「Sync toolchain」の前提（rustup show の実行可否）を満たしているか検証する。
+    # 健全な導入済み環境では何もしない（冪等・追加コストほぼゼロ）。
     #
-    # $GITHUB_PATH へ追記するのは `$HOME/.cargo/bin` 決め打ちではなく
+    # rustup が未導入・破損している場合の既定は **fail-closed**。ネットワークからの
+    # 導入は allow-network-install: 'true' の明示的な opt-in が要る（input の説明を参照）。
+    # 「runner に rustup が無い」は runner イメージ側の不備なので、ここで曖昧に
+    # 取り繕わず、何が足りないかを明示して落とすほうが診断的にも安全上も良い
+    # （黙って PATH だけ通して後続が exit 127 で落ちる、が従来の失敗モードだった）。
+    #
+    # 導入する場合、$GITHUB_PATH へ追記するのは `$HOME/.cargo/bin` 決め打ちではなく
     # `${CARGO_HOME:-$HOME/.cargo}/bin` であること。rustup-init は
     # **CARGO_HOME を尊重して**そこへ cargo/rustup 本体を配置するため、
     # CARGO_HOME を設定済みの runner（例: コンテナイメージ側で
@@ -28,14 +46,34 @@ runs:
     # インストールは成功しているのに PATH に載るのが実在しない
     # `$HOME/.cargo/bin` になり、後続ステップが `cargo: command not found`
     # （exit 127）で落ちる。本ステップが緑のまま失敗するため原因究明も難しい。
-    - name: Ensure rustup is installed
+    - name: Ensure rustup is available
+      env:
+        ALLOW_NETWORK_INSTALL: ${{ inputs.allow-network-install }}
       shell: bash
       run: |
         set -euo pipefail
-        if ! command -v rustup >/dev/null 2>&1 || ! rustup --version >/dev/null 2>&1; then
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          echo "${CARGO_HOME:-${HOME}/.cargo}/bin" >> "${GITHUB_PATH}"
+
+        if command -v rustup >/dev/null 2>&1 && rustup --version >/dev/null 2>&1; then
+          exit 0
         fi
+
+        if [ "${ALLOW_NETWORK_INSTALL}" != "true" ]; then
+          echo "::error::この runner に rustup がありません（未導入、または破損して実行できません）。"
+          echo '::error::本アクションは既定で fail-closed です。ネットワークからの rustup 導入は'
+          echo '::error::curl https://sh.rustup.rs | sh を伴い、pin できないリモートコードを'
+          echo '::error::ジョブ権限で実行することになるため、既定では行いません。'
+          echo "::error::恒久対応: runner イメージへ rustup を焼き込んでください。"
+          echo "::error::どうしても runner 上で導入する場合は allow-network-install: 'true' を明示してください。"
+          echo "診断情報:"
+          echo "  RUSTUP_HOME=${RUSTUP_HOME:-<未設定>}"
+          echo "  CARGO_HOME=${CARGO_HOME:-<未設定>}"
+          echo "  PATH=${PATH}"
+          exit 1
+        fi
+
+        echo "::warning::allow-network-install: 'true' のため、ネットワークから rustup を導入します（供給網リスクを許容した設定です）"
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+        echo "${CARGO_HOME:-${HOME}/.cargo}/bin" >> "${GITHUB_PATH}"
 
     # rustup show はカレントディレクトリの rust-toolchain.toml を検出し、
     # 指定チャネル・components を未導入なら自動インストールする
