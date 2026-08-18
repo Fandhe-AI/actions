@@ -197,8 +197,6 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 `.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
 第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
 ## 注意事項
 
 - ブランチ名は `{branch-prefix}-{YYYYMMDD}` 形式で **自動生成** (UTC 日付)。同日中の再実行では `--force-with-lease` で既存ブランチを上書きし、既存 PR を更新します。日をまたぐと新しい PR が起票されます

@@ -118,7 +118,7 @@ wasm-bindgen-cli、`browser-test` / `perf-harness` ジョブの wasm-pack。計 
 
 ## tarball チェックサムの調べ方
 
-`sha256` 入力に渡す値の求め方です（次節の「Action の SHA 固定」とは別物なので注意）。
+`sha256` 入力に渡す値の求め方です（Action 自体の参照バージョンとは別物なので注意）。
 
 `wasm-bindgen` は各 asset に `.sha256sum` を併載しています：
 
@@ -142,8 +142,6 @@ curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-
 ## Action の SHA 固定と更新方法
 
 セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
 ## 注意事項
 
 - **サプライチェーン**: 取得元は `https://github.com/rustwasm/<tool>/releases/...` に固定して

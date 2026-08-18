@@ -35,7 +35,9 @@ jobs:
           set -euo pipefail
           # gh api はエラーも stdout に出すため、存在判定は終了コードではなく HTTP status で
           # 行う（403 と 404 を取り違えると、既存タグがあるのに新規作成しに行って失敗する）。
-          code=$(gh api -i "repos/${REPO}/git/ref/tags/latest" 2>/dev/null | awk 'NR==1{print $2}')
+          # `|| true` が必須: set -e / pipefail 下では 404 応答（gh api の非ゼロ終了）で
+          # 代入自体がスクリプトを打ち切り、タグ新規作成の分岐へ到達できない。
+          code=$(gh api -i "repos/${REPO}/git/ref/tags/latest" 2>/dev/null | awk 'NR==1{print $2}' || true)
           case "${code}" in
             200)
               gh api --method PATCH "repos/${REPO}/git/refs/tags/latest" \

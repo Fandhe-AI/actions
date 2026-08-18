@@ -109,8 +109,6 @@ crate 名とコマンド名が異なるツールは `binary-name` で明示し�
 `.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
 第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
 ## 注意事項
 
 - **サプライチェーン**: crates.io からバージョン固定（`--locked` で Cargo.lock 準拠）で

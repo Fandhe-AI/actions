@@ -126,8 +126,6 @@ Status オプション名がデフォルトと異なる場合は inputs で指�
 `.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は不要である。
 第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定する。
 
-`actions` リポジトリを更新した場合は、以下の手順で SHA を更新してください：
-
 ## 注意事項
 
 - **PAT の有効期限**: fine-grained PAT は最大1年。定期ローテーション推奨
