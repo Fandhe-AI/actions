@@ -225,6 +225,26 @@ jobs:
             if [ -z "${sub_paths}" ]; then
               emit false ".gitmodules から submodule のパスを抽出できなかった"
             fi
+            # パス名の一致だけでは、登録済み submodule を通常ファイル・symlink・
+            # ディレクトリへ置換した変更や削除も通ってしまう。base と head の双方で
+            # エントリが gitlink であることを Git Trees API の契約
+            # （mode=160000 / type=commit）で実測する。contents API の
+            # type=submodule は実測では現行 API でも返るが、将来の major version で
+            # 変わり得ると GitHub が予告している値であり、判定の根拠には使わない
+            # （PR #87 codex P1）。tree は ref ごとに 1 回だけ取得する
+            for ref in "${BASE_SHA}" "${HEAD_SHA}"; do
+              if ! tree=$(gh api "repos/${REPO}/git/trees/${ref}?recursive=1" \
+                    --jq '(if .truncated then "TRUNCATED" else empty end),
+                          (.tree[] | [.path, .mode, .type] | @tsv)'); then
+                emit false "tree を取得できない: ${ref}"
+              fi
+              # truncated な tree は「該当エントリが無い」ことの証明にならない
+              if printf '%s\n' "${tree}" | grep -qx TRUNCATED; then
+                emit false "tree が truncated で全エントリを確認できない: ${ref}"
+              fi
+              if [ "${ref}" = "${BASE_SHA}" ]; then base_tree="${tree}"; else head_tree="${tree}"; fi
+            done
+
             while IFS=$'\t' read -r status f prev; do
               if [ -z "${f}" ]; then
                 continue
@@ -235,17 +255,12 @@ jobs:
               if [ "${status}" = renamed ]; then
                 emit false "submodule 同期に rename は現れない: ${prev} -> ${f}"
               fi
-              # パス名の一致だけでは、登録済み submodule を通常ファイル・symlink・
-              # ディレクトリへ置換した変更や削除も通ってしまう。base と head の
-              # 双方でエントリが gitlink（contents API の type=submodule）である
-              # ことを実測する（PR #87 codex P0）
-              for ref in "${BASE_SHA}" "${HEAD_SHA}"; do
-                if ! entry_type=$(gh api \
-                      "repos/${REPO}/contents/${f}?ref=${ref}" --jq '.type'); then
-                  emit false "gitlink の型を確認できない: ${f}@${ref}"
-                fi
-                if [ "${entry_type}" != submodule ]; then
-                  emit false "gitlink ではない変更を含む: ${f}@${ref} は ${entry_type}"
+              for side in base head; do
+                if [ "${side}" = base ]; then tree="${base_tree}"; else tree="${head_tree}"; fi
+                entry=$(printf '%s\n' "${tree}" \
+                  | awk -F'\t' -v p="${f}" '$1 == p { print $2 "/" $3; exit }')
+                if [ "${entry}" != "160000/commit" ]; then
+                  emit false "gitlink ではない変更を含む: ${f} の ${side} 側は ${entry:-不在}"
                 fi
               done
             done < <(printf '%s\n' "${files}")
