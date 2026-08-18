@@ -19,13 +19,22 @@ runs:
     # （rustup show の実行可否）を自己修復する。健全な導入済み環境では
     # 何もしない（冪等・追加コストほぼゼロ）。導入時は非対話・HTTPS 検証込みで
     # 取得し、既定ツールチェーンは rust-toolchain.toml に委ねる（none 指定）。
+    #
+    # $GITHUB_PATH へ追記するのは `$HOME/.cargo/bin` 決め打ちではなく
+    # `${CARGO_HOME:-$HOME/.cargo}/bin` であること。rustup-init は
+    # **CARGO_HOME を尊重して**そこへ cargo/rustup 本体を配置するため、
+    # CARGO_HOME を設定済みの runner（例: コンテナイメージ側で
+    # `ENV CARGO_HOME=/opt/cargo` を持つ self-hosted runner）で決め打ちすると、
+    # インストールは成功しているのに PATH に載るのが実在しない
+    # `$HOME/.cargo/bin` になり、後続ステップが `cargo: command not found`
+    # （exit 127）で落ちる。本ステップが緑のまま失敗するため原因究明も難しい。
     - name: Ensure rustup is installed
       shell: bash
       run: |
         set -euo pipefail
         if ! command -v rustup >/dev/null 2>&1 || ! rustup --version >/dev/null 2>&1; then
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+          echo "${CARGO_HOME:-${HOME}/.cargo}/bin" >> "${GITHUB_PATH}"
         fi
 
     # rustup show はカレントディレクトリの rust-toolchain.toml を検出し、

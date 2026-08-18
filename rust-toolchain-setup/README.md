@@ -53,7 +53,7 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
         run: |
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-            echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+            echo "${CARGO_HOME:-${HOME}/.cargo}/bin" >> "${GITHUB_PATH}"
           fi
 
       - name: Sync toolchain (rust-toolchain.toml)
@@ -105,8 +105,15 @@ gh api repos/Fandhe-AI/actions/commits/main --jq '.sha'
   `rustup toolchain install <pinned-nightly>` 等を別ステップで明示する
   （本アクションは単一真実源の同期のみを担う）
 - **PATH の反映タイミング**: 新規インストール時は `$GITHUB_PATH` へ
-  `~/.cargo/bin` を追記する。反映は後続ステップからのため、同一ステップ内で
-  続けて cargo を呼ぶ構成にはしない（本アクション内部はステップ分割済みで問題ない）
+  `${CARGO_HOME:-$HOME/.cargo}/bin` を追記する。反映は後続ステップからのため、
+  同一ステップ内で続けて cargo を呼ぶ構成にはしない（本アクション内部はステップ分割済みで問題ない）
+- **`CARGO_HOME` を設定済みの runner**: rustup-init は `CARGO_HOME` を尊重して
+  そこへ cargo/rustup 本体を配置する。self-hosted runner のコンテナイメージが
+  `ENV CARGO_HOME=/opt/cargo` のように設定している場合、`$HOME/.cargo/bin` を
+  決め打ちで `$GITHUB_PATH` に入れると、インストールは成功しているのに PATH に
+  載るのが実在しないディレクトリになり、後続ステップが
+  `cargo: command not found`（exit 127）で落ちる。本アクションは
+  `${CARGO_HOME:-$HOME/.cargo}/bin` を追記してこれを回避する
 - **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
   ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
   利用が制限されている場合は許可が必要
