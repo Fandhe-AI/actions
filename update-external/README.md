@@ -51,6 +51,7 @@ reusable 化により、下流が持つのは wrapper 1 ファイルだけにな
 | `skills-auto-merge-allowlist` | `''` | 同 allowlist |
 | `submodule-close-superseded` | `'false'` | 古い submodule 更新 PR（最新日付ブランチ以外）を close するか（`'true'` / `'false'` の文字列）。値域外は `validate-inputs` ジョブが fail-closed で失敗させる |
 | `skills-close-superseded` | `'false'` | 古いスキル更新 PR を close するか。値域検証は `submodule-close-superseded` と同じ |
+| `skills` | `''` | 更新対象のスキル名（改行 / カンマ / 空白区切り）。空なら全スキル更新（従来の挙動）。composite action `skills-update` の同名入力へ透過する。自由記述のため値域検証は行わない（`*-auto-merge-allowlist` と同じ扱い） |
 
 ### 古い日次更新 PR の自動 close
 

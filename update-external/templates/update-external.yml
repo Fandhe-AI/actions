@@ -79,6 +79,11 @@ jobs:
       # 詳細は Fandhe-AI/actions の update-external/README.md を参照。
       # submodule-close-superseded: 'true'
       # skills-close-superseded: 'true'
+
+      # 更新対象スキルの限定（改行 / カンマ / 空白区切り）。未指定なら全スキルを更新する。
+      # 全スキル更新で問題が出るリポジトリの回避策ではなく、更新範囲を絞りたい場合の
+      # 任意設定である（回避策として必要だった事象は解消済み）。
+      # skills: 'create-commit create-pr'
     secrets:
       # 未登録のシークレット参照は空文字になり、reusable workflow 側の fail-closed
       # ガードがジョブを失敗させる（黙って GITHUB_TOKEN へフォールバックしない）。

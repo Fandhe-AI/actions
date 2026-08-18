@@ -160,6 +160,18 @@ on:
         type: string
         required: false
         default: 'false'
+      skills:
+        description: >
+          更新対象のスキル名（改行 / カンマ / 空白区切り）。空なら全スキルを更新する
+          （既定であり、従来の挙動と同一）。composite action skills-update の同名入力へ
+          そのまま透過する。
+          値域検証は行わない。auto-merge / close-superseded と違い列挙値ではなく
+          自由記述のスキル名リストであり、同じく自由記述の *-auto-merge-allowlist にも
+          検証を課していない（列挙値のみ fail-closed に落とす、という本ファイルの方針）。
+          存在しないスキル名を渡した場合の扱いは composite action 側の契約に従う。
+        type: string
+        required: false
+        default: ''
     secrets:
       SUBMODULE_PAT:
         description: >
@@ -731,6 +743,10 @@ jobs:
           # 警告のみで job が緑のまま素通りし固定が無効化されるため要検証）。
           # node-version と同じく集中管理項目とし、呼び出し側では上書きさせない。
           skills-version: '1.5.22'
+          # 更新対象スキルの限定。空（既定）なら composite action 側が全スキル更新へ倒す。
+          # input 名は pin 先 SHA fed9c07 の action.yml で実在確認済み
+          # （未知の input は警告のみで job が緑のまま素通りするため、透過は必ず実在確認とセット）。
+          skills: ${{ inputs.skills }}
           # auto-merge の ON/OFF。理由は submodule ジョブ側の注記を参照。
           auto-merge: ${{ inputs.skills-auto-merge }}
           auto-merge-allowlist: ${{ inputs.skills-auto-merge-allowlist }}
