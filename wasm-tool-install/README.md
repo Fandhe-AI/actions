@@ -139,9 +139,11 @@ curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-
   | shasum -a 256
 ```
 
-## Action の SHA 固定と更新方法
+## 参照バージョン（`@latest`）
 
-セキュリティのため、Action は `@main` ではなくコミット SHA で固定しています。
+`Fandhe-AI/actions` は可変タグ `@latest` で参照します。`latest` は main への push ごとに
+`.github/workflows/move-latest-tag.yml` が付け替えるため、呼び出し側で参照を更新する作業は
+不要です。第三者の action（`actions/checkout` 等）は従来どおりコミット SHA で固定します。
 ## 注意事項
 
 - **サプライチェーン**: 取得元は `https://github.com/rustwasm/<tool>/releases/...` に固定して
