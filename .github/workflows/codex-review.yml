@@ -94,6 +94,17 @@ on:
         type: string
         required: false
         default: "P0,P1"
+      skip-sync-pr-review:
+        description: >-
+          本リポジトリの update-external.yml が生成する日次同期 PR
+          （head branch が chore/skills-update* / chore/submodule-update*）で
+          codex レビューを skip する。同期 PR の差分は上流スキル / submodule の
+          取り込みそのものであり、指摘があっても修正できる場所は取り込み元の
+          上流リポジトリしかない。レビューを回してもその PR では解消できず、
+          マージだけが滞る。既定 false（従来どおり全 PR をレビューする）
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -105,9 +116,20 @@ jobs:
     # (1) CODEX_HOME_DIR 未設定（runner 未準備）の間は実行しない
     #     （vars は呼び出し側リポジトリ／org の Actions variables を参照する）
     # (2) fork PR では untrusted コードを self-hosted runner で実行しない（fail-closed）
+    # (3) skip-sync-pr-review: true の呼び出し側では、日次同期 PR をレビュー対象から外す。
+    #     接頭辞リテラルは同リポジトリの .github/workflows/update-external.yml が
+    #     skills-update / submodule-update action へ渡す branch-prefix と対になっている
+    #     （片方を変えたら両方直すこと。GitHub Actions の if 式には反復がないため、
+    #     入力で受けたリストを回す形にはできず、生成側と同居する利点を採ってリテラルで書く）。
+    #     skip は job 単位に留める。check-run 自体は "skipped" 結論で生成されるため
+    #     required status check を満たせる。workflow / paths フィルタで workflow ごと
+    #     起動しない形にすると check-run が作られず Expected のまま埋まらないため不可
     if: >-
       vars.CODEX_HOME_DIR != '' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !(inputs.skip-sync-pr-review &&
+      (startsWith(github.event.pull_request.head.ref, 'chore/skills-update') ||
+      startsWith(github.event.pull_request.head.ref, 'chore/submodule-update')))
     # pull-requests: read は「Collect unresolved review threads」ステップが未解決
     # レビュースレッド一覧を読むためだけに使う読み取り権限。書き込み権限
     # （pull-requests: write）は従来どおり post_feedback ジョブのみが持ち、
