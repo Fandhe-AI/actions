@@ -159,6 +159,18 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 - **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
   ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
   利用が制限されている場合は許可が必要
+- **破壊的変更（既定有効）**: stale credential ガードは既定 `'true'` で有効に
+  なる（issue #98 の受け入れ条件「stale credential 残置下でも公開 repo への
+  匿名 fetch が成功する」は既定有効が前提）。影響を受けるのは
+  **グローバル git config の github.com 向け `http.extraheader` で認証している
+  既存ジョブのみ**であり、`actions/checkout` が書き込むリポジトリローカルの
+  認証・credential helper（`gh auth setup-git` 等）・`url.<...>.insteadOf`・
+  他ホスト向け extraheader による認証は影響を受けない。該当するジョブの
+  追随方法は次のいずれか: (1) `sanitize-github-extraheader: 'false'` を明示して
+  ガードを無効化する（本ガードが防ぐ 401 は再発しうる）、(2) 認証を
+  リポジトリローカル config / credential helper / `url.<...>.insteadOf` へ
+  移行する。本リポジトリは `@latest` 参照（main へ自動追従）のため、
+  この変更は main へのマージで消費側へ即時伝播する
 - **stale credential ガードの適用範囲**: オーバーレイでリセットする対象は
   github.com 向けの `http.extraheader`（base・パススコープ
   `http.https://github.com/Org/.extraheader` 等を含むスコープ付き・host 非限定の

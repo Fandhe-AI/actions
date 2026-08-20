@@ -92,8 +92,15 @@ inputs:
 
       根本原因（ホスト側の残置資格情報）の恒久対応は runner ホスト側で行う
       （本 input は CI 側の多層防御の 1 層であり、根本対応の代替ではない）。
-      互換問題が起きた場合の escape hatch として 'false' で無効化できる
-      （ただし無効化すると本 input が防ぐ 401 を再発させうる）。
+
+      注意（破壊的変更になり得る条件）: 既定 'true' のため、グローバル git config
+      の github.com 向け `http.extraheader` に**依存して認証している**既存ジョブ
+      では、本アクション導入・更新により当該認証が無効化される（リポジトリ
+      ローカル config・credential helper・`url.<...>.insteadOf`・他ホスト向け
+      extraheader による認証は影響を受けない）。該当する場合は escape hatch
+      として 'false' で無効化するか、認証をリポジトリローカル config /
+      credential helper 等へ移行すること（ただし無効化すると本 input が防ぐ
+      401 を再発させうる）。
     required: false
     default: 'true'
 
@@ -391,13 +398,29 @@ runs:
               if [ -z "${ipath}" ]; then
                 continue
               fi
-              # `~/` は $HOME へ展開する（`~user/` 形式は展開せず、実在しない
-              # リテラルパスとして skip に倒れる）。相対パスは git の解決規則
-              # どおり参照元ファイルのディレクトリ基準で絶対化する。
+              # パス解決は git と同じ 3 形式のみを扱う: `~/` は $HOME へ展開、
+              # `/` 始まりは絶対、それ以外は参照元ファイルのディレクトリ基準の
+              # 相対。git が解決できるのに本ガードが解決できない構文
+              # （`~user/` 展開・`%(prefix)/` 等の git 展開構文）は、skip に
+              # 倒すと「git は読めるが本ガードは列挙できない」ファイルが生じ、
+              # そこに条件付き include 経由の github.com 向け extraheader が
+              # あると silent fail-open になる（base probe は現行コンテキスト
+              # のみで検知不能）ため、検出した時点で fail-closed でエラー終了
+              # する。解決後に不存在・不可読となるパスは従来どおり git 自身の
+              # 挙動（silently ignore）に合わせて skip する。パスの値はログへ
+              # 出力しない（固定文字列のみ）。
               case "${ipath}" in
-                "~/"*) ipath="${HOME}/${ipath#\~/}" ;;
-              esac
-              case "${ipath}" in
+                *"%("*)
+                  echo "::error::include パスに本ガードが解決できない構文（%(prefix) 等の git 展開構文）が含まれるためガードを失敗させます。runner ホスト側で当該 include を絶対パスへ変更するか、sanitize-github-extraheader: 'false' で無効化してください"
+                  exit 1
+                  ;;
+                "~/"*)
+                  ipath="${HOME}/${ipath#\~/}"
+                  ;;
+                "~"*)
+                  echo "::error::include パスに本ガードが解決できない構文（~user/ 展開）が含まれるためガードを失敗させます。runner ホスト側で当該 include を絶対パスへ変更するか、sanitize-github-extraheader: 'false' で無効化してください"
+                  exit 1
+                  ;;
                 /*) ;;
                 *) ipath="$(dirname "${f}")/${ipath}" ;;
               esac
