@@ -54,10 +54,20 @@ inputs:
       helper 由来の 401 が残る場合は、呼び出し側の該当コマンドに
       `GIT_CONFIG_GLOBAL=/dev/null` を環境変数として渡す回避策を検討すること。
 
+      `GIT_CONFIG_GLOBAL` が未設定の場合、git 自身の解決規則にならい
+      `$XDG_CONFIG_HOME/git/config`（無ければ `$HOME/.config/git/config`）と
+      `$HOME/.gitconfig` の両方を（存在するものだけ）この順で `[include]` する
+      （両ファイルとも存在する場合、git は両方を読み込み `.gitconfig` 側が
+      後勝ちする。どちらか一方だけを見て他方を無視すると、無視した側に残る
+      stale credential を見落として fail-open になる・あるいは他方の正当な
+      設定を巻き添えで消してしまうため、必ず両方を対象にする）。
+
       オーバーレイ作成後は `git config --file <オーバーレイ> --includes
       --get-urlmatch http.extraheader https://github.com/`（リポジトリローカル・
       system config は混ぜず、オーバーレイ経由の実効値のみを見る）で github.com
       向け実効値が残っていないことを検証し、残っていればジョブを失敗させる。
+      値そのものは変数にも代入せず、標準出力を捨てたうえでバイト数と終了コード
+      のみで判定する（xtrace 有効時のログ露出を避けるため）。
 
       根本原因（ホスト側の残置資格情報）の恒久対応は runner ホスト側で行う
       （本 input は CI 側の多層防御の 1 層であり、根本対応の代替ではない）。
@@ -108,77 +118,126 @@ runs:
             ;;
         esac
 
-        # ガード対象となる「元の global config」ファイルを決定する。呼び出し側
+        # canonicalize: include.path は「取り込む側のファイルのディレクトリ」からの
+        # 相対パスとして解決される。オーバーレイは $RUNNER_TEMP 配下に置くため、
+        # 呼び出し側が相対パスの GIT_CONFIG_GLOBAL を渡していた場合などに include が
+        # 静かに解決失敗し、以降の全ステップから global config 全体が消える
+        # （＝正当な設定も含めて全損する）事故を避けるため、必ず絶対パス化する。
+        canonicalize() {
+          case "$1" in
+            /*) printf '%s\n' "$1" ;;
+            *) printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")" ;;
+          esac
+        }
+
+        # ガード対象となる「元の global config」ファイル群を決定する。呼び出し側
         # ジョブが既に GIT_CONFIG_GLOBAL を設定済みであればそれを尊重する
         # （'/dev/null' はグローバル設定を意図的に無効化している状態であり、
         # ガード対象が存在しないため何もしない）。未設定なら git 自身の解決規則
-        # （$HOME/.gitconfig を優先し、無ければ XDG パス）と同じ優先順位で
-        # ファイルの存在を確認する。
+        # （$XDG_CONFIG_HOME/git/config → $HOME/.gitconfig の順に読み、両方
+        # 存在すれば両方が実効になり $HOME/.gitconfig 側が後勝ちする）に合わせ、
+        # 存在するファイルを **両方とも** 対象にする。どちらか一方だけを見ると、
+        # 見なかった側に残る stale credential を見落として fail-open になる、
+        # あるいは見なかった側の正当な設定を巻き添えで消してしまう。
+        base_configs=()
         if [ -n "${GIT_CONFIG_GLOBAL:-}" ]; then
           if [ "${GIT_CONFIG_GLOBAL}" = "/dev/null" ]; then
             exit 0
           fi
-          base_config="${GIT_CONFIG_GLOBAL}"
-        elif [ -f "${HOME}/.gitconfig" ]; then
-          base_config="${HOME}/.gitconfig"
-        elif [ -f "${XDG_CONFIG_HOME:-${HOME}/.config}/git/config" ]; then
-          base_config="${XDG_CONFIG_HOME:-${HOME}/.config}/git/config"
+          if [ -f "${GIT_CONFIG_GLOBAL}" ]; then
+            base_configs+=("$(canonicalize "${GIT_CONFIG_GLOBAL}")")
+          fi
         else
+          xdg_config="${XDG_CONFIG_HOME:-${HOME}/.config}/git/config"
+          [ -f "${xdg_config}" ] && base_configs+=("$(canonicalize "${xdg_config}")")
+          [ -f "${HOME}/.gitconfig" ] && base_configs+=("$(canonicalize "${HOME}/.gitconfig")")
+        fi
+
+        if [ "${#base_configs[@]}" -eq 0 ]; then
           # グローバル git config が存在しない（stale credential もあり得ない）
           exit 0
         fi
 
-        if [ ! -f "${base_config}" ]; then
-          # 呼び出し側が指定した GIT_CONFIG_GLOBAL が指す先が未作成
-          exit 0
-        fi
-
-        # 除去対象の有無を確認する。値そのものは一切出力しない。`--file` +
-        # `--includes` で「実際に github.com への git 操作が見る実効値」（スコープ付き
-        # extraheader・host 非限定 extraheader の両方を含む）を見る一方、リポジトリ
-        # ローカル・system config は混ぜない（本ステップの実行時点で既に
-        # actions/checkout 済みの場合、リポジトリローカルの正当な extraheader を
-        # stale credential と誤認して fail-closed させないため）。
-        #
-        # exit code: 0 = 実効値あり, 1 = マッチ無し（正常系）, それ以外 = config
-        # 破損等の実エラー。`|| true` で握り潰すと異常時に「値なし」と誤判定して
-        # fail-open になるため、exit code を明示的に判定する。
-        set +e
-        remaining="$(git config --file "${base_config}" --includes --get-urlmatch http.extraheader https://github.com/ 2>/dev/null)"
-        get_rc=$?
-        set -e
-
-        if [ "${get_rc}" -ne 0 ] && [ "${get_rc}" -ne 1 ]; then
-          echo "::error::グローバル git config の読み取りに失敗しました。config が破損している可能性があります"
-          exit 1
-        fi
-
-        if [ "${get_rc}" -ne 0 ] || [ -z "${remaining}" ]; then
-          # github.com 向けの実効 extraheader が無い（stale credential なし）
-          exit 0
-        fi
-
-        # ここから: 実 global config は一切書き換えず、ジョブ専用の「オーバーレイ」を
-        # 作成する（$RUNNER_TEMP 配下、他ジョブ・他ユーザーから読めないよう
-        # パーミッションを絞る）。オーバーレイは元の global config を [include] で
-        # 取り込んだ上で、github.com 向け http.extraheader を空値で上書きする。
-        # git の http.extraHeader は空値を与えると、それより前に（include 経由も
-        # 含め）累積された同一 URL 向けの値をすべてリセットする仕様であるため、
-        # スコープ付き・host 非限定のどちらから累積された値も、元ファイルへ一切
-        # 書き込まずに github.com 向けの実効値だけを無効化できる（実測検証済み）。
-        # include.path の値（ファイルパス）は秘密情報ではないため、コマンドライン
-        # 引数として渡してよい。extraheader の値そのものはここでも一度も扱わない。
+        # 実 global config は一切書き換えず、ジョブ専用の「オーバーレイ」を
+        # $RUNNER_TEMP 配下（他ジョブ・他ユーザーから読めないようパーミッションを
+        # 絞る）に作成する。まずは元の global config（複数ファイルすべて）を
+        # [include] で取り込むだけの状態で、除去対象（github.com 向け実効
+        # extraheader）の有無を確認する。include.path の値（ファイルパス）は
+        # 秘密情報ではないため、コマンドライン引数として渡してよい。extraheader
+        # の値そのものはこのステップのどの変数にも代入しない（xtrace 有効時の
+        # ログ露出を避けるため、標準出力は常に /dev/null または wc に捨て、
+        # バイト数と終了コードのみで判定する）。
         tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/git-global-overlay.XXXXXX")"
         chmod 700 "${tmp_dir}"
         overlay="${tmp_dir}/gitconfig"
         : > "${overlay}"
         chmod 600 "${overlay}"
 
-        if ! git config --file "${overlay}" --add -- include.path "${base_config}"; then
-          echo "::error::グローバル git config のオーバーレイ作成に失敗しました（include.path の設定に失敗）"
+        own_lines=0
+        for cfg in "${base_configs[@]}"; do
+          if ! git config --file "${overlay}" --add -- include.path "${cfg}"; then
+            echo "::error::グローバル git config のオーバーレイ作成に失敗しました（include.path の設定に失敗）"
+            exit 1
+          fi
+          own_lines=$((own_lines + 1))
+        done
+
+        # include が実際に解決されていることを検証する（静かな解決失敗の検出）。
+        # 元ファイルそのものに実効エントリが 1 つ以上あるなら、オーバーレイ側で
+        # `--includes` 込みに展開した行数が「include.path 自身の行数（own_lines）」
+        # より増えていなければならない。増えていなければ、少なくとも 1 つの
+        # include が中身を読み込めていない（パス解決失敗・権限不足等）可能性が
+        # 高い。元ファイルが元々空（エントリ 0 件）の場合はこの限りではない
+        # （失うものが無いため）。値は一切出力せず行数のみを見る。
+        direct_total=0
+        for cfg in "${base_configs[@]}"; do
+          cfg_lines="$(git config --file "${cfg}" --list 2>/dev/null | wc -l | tr -d ' ')"
+          direct_total=$((direct_total + cfg_lines))
+        done
+
+        if [ "${direct_total}" -gt 0 ]; then
+          expanded_lines="$(git config --file "${overlay}" --includes --list 2>/dev/null | wc -l | tr -d ' ')"
+          if [ "${expanded_lines}" -le "${own_lines}" ]; then
+            echo "::error::グローバル git config のオーバーレイで include が展開されませんでした。include 対象が壊れているか読み取れない可能性があります"
+            exit 1
+          fi
+        fi
+
+        # 除去対象の有無を確認する。値そのものは一切変数へ代入せず、標準出力は
+        # 常に wc へ渡してバイト数のみを見る。`--file` + `--includes` で「実際に
+        # github.com への git 操作が見る実効値」（スコープ付き extraheader・
+        # host 非限定 extraheader の両方を含む）を見る一方、リポジトリローカル・
+        # system config は混ぜない（本ステップの実行時点で既に actions/checkout
+        # 済みの場合、リポジトリローカルの正当な extraheader を stale credential
+        # と誤認して fail-closed させないため）。
+        #
+        # exit code: 0 = マッチあり, 1 = マッチ無し（正常系）, それ以外 = config
+        # 破損等の実エラー。`|| true` で握り潰すと異常時に「値なし」と誤判定して
+        # fail-open になるため、exit code を明示的に判定する。空値（値なし）でも
+        # `--get-urlmatch` は rc=0 かつ改行のみ（1 byte）を返しうるため、rc に加えて
+        # バイト数（1 byte 超か）でも実効値の有無を判定する。
+        set +e
+        pre_len="$(git config --file "${overlay}" --includes --get-urlmatch http.extraheader https://github.com/ 2>/dev/null | wc -c | tr -d ' ')"
+        pre_rc="${PIPESTATUS[0]}"
+        set -e
+
+        if [ "${pre_rc}" -ne 0 ] && [ "${pre_rc}" -ne 1 ]; then
+          echo "::error::グローバル git config の読み取りに失敗しました。config が破損している可能性があります"
           exit 1
         fi
 
+        if [ "${pre_rc}" -ne 0 ] || [ "${pre_len}" -le 1 ]; then
+          # github.com 向けの実効 extraheader が無い（stale credential なし）
+          rm -rf "${tmp_dir}"
+          exit 0
+        fi
+
+        # ここから: オーバーレイに github.com 向け http.extraheader を空値で
+        # 追記し、上書きする。git の http.extraHeader は空値を与えると、それより
+        # 前に（include 経由も含め、複数ファイルにまたがっていても）累積された
+        # 同一 URL 向けの値をすべてリセットする仕様であるため、スコープ付き・
+        # host 非限定のどちらから累積された値も、元ファイルへ一切書き込まずに
+        # github.com 向けの実効値だけを無効化できる（実測検証済み）。
         if ! git config --file "${overlay}" --add -- 'http.https://github.com/.extraheader' ""; then
           echo "::error::グローバル git config のオーバーレイ作成に失敗しました（extraheader のリセットに失敗）"
           exit 1
@@ -189,10 +248,11 @@ runs:
         # オーバーレイに対する検証（fail-closed）: github.com への実効 extraheader が
         # 本当に残っていないことを、実ファイルの読み取り時と同じ `--file` + `--includes`
         # 経路で確認する（リポジトリローカル・system config を混ぜない）。残っていれば
-        # ガード失敗とする（黙って 401 を再発させない）。exit code の扱いは上記と同じ。
+        # ガード失敗とする（黙って 401 を再発させない）。判定方法は上記と同じ
+        # （値は変数に代入せず、rc とバイト数のみを見る）。
         set +e
-        after="$(git config --file "${overlay}" --includes --get-urlmatch http.extraheader https://github.com/ 2>/dev/null)"
-        after_rc=$?
+        after_len="$(git config --file "${overlay}" --includes --get-urlmatch http.extraheader https://github.com/ 2>/dev/null | wc -c | tr -d ' ')"
+        after_rc="${PIPESTATUS[0]}"
         set -e
 
         if [ "${after_rc}" -ne 0 ] && [ "${after_rc}" -ne 1 ]; then
@@ -200,7 +260,7 @@ runs:
           exit 1
         fi
 
-        if [ "${after_rc}" -eq 0 ] && [ -n "${after}" ]; then
+        if [ "${after_rc}" -eq 0 ] && [ "${after_len}" -gt 1 ]; then
           echo "::error::オーバーレイ適用後も github.com 向け extraheader が実効値として残存しています。ガードに失敗しました"
           exit 1
         fi
