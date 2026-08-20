@@ -25,7 +25,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 |---|---|---|
 | `cargo-tool-install/` | Composite Action | cargo ツールのバージョン固定（`--locked`）・冪等インストール |
 | `wasm-tool-install/` | Composite Action | `wasm-bindgen-cli` / `wasm-pack` のバージョン固定 + SHA256 検証 + atomic install（rename）による冪等導入 |
-| `rust-toolchain-setup/` | Composite Action | self-hosted runner 上での rustup 自己修復と `rust-toolchain.toml` へのツールチェーン同期（`components` で追加コンポーネントを冪等インストール） |
+| `rust-toolchain-setup/` | Composite Action | self-hosted runner 上での rustup 自己修復と `rust-toolchain.toml` へのツールチェーン同期（`components` で追加コンポーネントを冪等インストール。先頭で github.com 向け stale credential（`http.extraheader`、スコープ付き・host 非限定とも）を空値でリセットするだけのジョブ専用オーバーレイ（元 config を `[include]` で取り込む）を `GIT_CONFIG_GLOBAL` で以降のステップにのみ適用し、runner ホストの実 global config・extraheader の値そのものには一切触れずに公開 repo への匿名 fetch の 401 混入を防ぐガードを既定有効で実施） |
 | `post-comment/` | Composite Action | Issue/PR へのコメント投稿（`gh issue comment`） |
 | `idempotent-issue/` | Composite Action | ラベル冪等作成 → 重複検索 → 未存在時のみ Issue 起票（`gh label create` / `gh issue list` / `gh issue create`） |
 | `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
