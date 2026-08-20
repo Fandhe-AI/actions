@@ -94,17 +94,28 @@ on:
         type: string
         required: false
         default: "P0,P1"
+      skip-branch-prefixes:
+        description: >-
+          codex レビューを skip する head branch 名の接頭辞（カンマ区切り。
+          例 "chore/skills-update,chore/submodule-update"）。update-external.yml が
+          生成する日次同期 PR のような自動生成 PR をレビュー対象から外す用途。
+          同期 PR の差分は上流の取り込みそのもので、指摘があっても修正先は
+          取り込み元の上流リポジトリにしかなく、レビューを回してもマージが滞るだけになる。
+          判定はブランチ名の接頭辞のみで行うため、リポジトリへ push できる主体は
+          該当接頭辞のブランチから任意の変更を提出して codex レビューと P0/P1 gate を
+          回避できる（受容済み残留リスク。詳細は codex-review/README.md）。
+          第三者の write コラボレーターを迎えるリポジトリでは指定しないこと。
+          既定は空（全 PR をレビューする）
+        type: string
+        required: false
+        default: ""
       skip-sync-pr-review:
         description: >-
-          本リポジトリの update-external.yml が生成する日次同期 PR で codex レビューを
-          skip する。同期 PR の差分は上流スキル / submodule の取り込みそのものであり、
-          指摘があっても修正できる場所は取り込み元の上流リポジトリしかない。
-          レビューを回してもその PR では解消できず、マージだけが滞る。
-          判定は head branch 名だけでは行わない（ブランチ名は誰でも付けられるため、
-          接頭辞だけを条件にすると任意の変更が chore/skills-update-* から提出する
-          だけで P0/P1 gate を回避できてしまう）。sync-gate ジョブが接頭辞に加えて
-          変更ファイル集合を実測し、同期が触る範囲だけの差分であることを確認した
-          場合にのみ skip する。既定 false（従来どおり全 PR をレビューする）
+          【deprecated】skip-branch-prefixes への移行期間中だけ残している旧 input。
+          true は skip-branch-prefixes: "chore/skills-update,chore/submodule-update"
+          の指定と同義に扱う（skip-branch-prefixes が非空ならそちらを優先）。
+          かつての「変更ファイル集合の実測」は行わず接頭辞判定のみになる点に注意。
+          呼び出し側の移行が済み次第、次の破壊的変更で削除する
         type: boolean
         required: false
         default: false
@@ -113,42 +124,45 @@ permissions:
   contents: read
 
 jobs:
-  # 日次同期 PR（update-external.yml が生成）かどうかを実測で判定するゲート。
-  # skip-sync-pr-review: true の呼び出し側でのみ起動し、それ以外では skip されて
-  # outputs が空になる（codex 側は空を「skip しない」と解釈する fail-closed）。
+  # head branch 名の接頭辞で「レビューを skip する自動生成 PR」かどうかを判定する
+  # ゲート。skip-branch-prefixes が空でない（または deprecated な skip-sync-pr-review が
+  # true の）呼び出し側でのみ起動し、それ以外では skip されて outputs が空になる
+  # （codex 側は空を「skip しない」と解釈する fail-closed）。
   #
-  # なぜ head branch の接頭辞だけで判定しないか: ブランチ名は同一リポジトリへ push
-  # できる誰でも付けられる。接頭辞だけを条件にすると、任意の変更を
-  # chore/skills-update-evil から提出するだけで codex レビューと P0/P1 gate を
-  # 丸ごと回避できる（共有 gh 認証で動くエージェントも同じ経路を踏める）。
-  # そこで接頭辞に加えて「変更ファイル集合が同期の触る範囲に収まっていること」を
-  # PR files API で実測する。取得・解析に失敗した場合はレビューを実行する側へ倒す。
+  # 判定はブランチ名の接頭辞のみで行う。ブランチ名は同一リポジトリへ push できる
+  # 誰でも付けられるため、push できる主体による偽装は防げないが、その主体は
+  # 自動生成 PR を作る資格情報の持ち主と実質一致するため受容している
+  # （codex-review/README.md「受容済み残留リスク」参照。第三者の write
+  # コラボレーターを迎える場合は skip-branch-prefixes を空へ戻すこと）。
+  # fork PR では本ジョブ自体が起動せず、codex 側の同一リポジトリ条件でも対象外になる。
   #
   # 資格情報（CODEX_HOME）には触れないため post-feedback 側の runner ラベルを使う。
-  sync-gate:
+  skip-gate:
     runs-on: ${{ inputs.post-feedback-runner-label }}
     timeout-minutes: 5
     if: >-
-      inputs.skip-sync-pr-review &&
+      (inputs.skip-branch-prefixes != '' || inputs.skip-sync-pr-review) &&
       github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: read
-      pull-requests: read
+    # ブランチ名の比較だけで API を呼ばないため、権限は一切要らない
+    permissions: {}
     outputs:
       skip: ${{ steps.decide.outputs.skip }}
     steps:
-      - name: Decide whether this PR is a generated sync PR
+      - name: Decide whether to skip review by branch prefix
         id: decide
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SKIP_PREFIXES: ${{ inputs.skip-branch-prefixes }}
+          LEGACY_SKIP_SYNC: ${{ inputs.skip-sync-pr-review }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
+
+          # 【deprecated】旧 input の互換: skip-branch-prefixes 未指定で
+          # skip-sync-pr-review: true の場合は従来の同期 PR 接頭辞を適用する
+          if [ -z "${SKIP_PREFIXES}" ] && [ "${LEGACY_SKIP_SYNC}" = "true" ]; then
+            SKIP_PREFIXES='chore/skills-update,chore/submodule-update'
+          fi
 
           # 判定結果の唯一の出口。呼ばずにスクリプトが死んだ場合は output 自体が
           # 空になり、codex 側の `!= 'true'` がレビュー実行側へ倒れる（fail-closed）
@@ -158,115 +172,29 @@ jobs:
             exit 0
           }
 
-          # 接頭辞は update-external.yml が skills-update / submodule-update action へ
-          # 渡す branch-prefix と対になっている（片方を変えたら両方直すこと）。
-          # ブランチ名は誰でも付けられるため、これは判定の入口でしかない
-          case "${HEAD_REF}" in
-            chore/skills-update*)    kind=skills ;;
-            chore/submodule-update*) kind=submodule ;;
-            *) emit false "head branch が同期 PR の接頭辞に一致しない (${HEAD_REF})" ;;
-          esac
-
-          # status と previous_filename も取る。filename だけを見ると、許可範囲外の
-          # ファイルを許可パス配下へ rename した PR が「新しい名前」だけで許可判定を
-          # 通り、範囲外ファイルの削除を隠せる（PR #87 codex P0）。
-          # PR files API は --paginate でも 3000 件で打ち切られる。上限に達した一覧は
-          # 「対象外ファイルが無い」ことの証明にならないため判定不能として扱う
-          if ! files=$(gh api --paginate \
-                "repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
-                --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv'); then
-            emit false "変更ファイル一覧を取得できなかった"
-          fi
-          if [ -z "${files}" ]; then
-            emit false "変更ファイルが 0 件（判定材料が無い）"
-          fi
-          count=$(printf '%s\n' "${files}" | grep -c '' || true)
-          if [ "${count}" -ge 3000 ]; then
-            emit false "変更ファイルが API 上限（3000 件）に達しており全件を確認できない"
-          fi
-
-          if [ "${kind}" = skills ]; then
-            # skills-update が触る範囲: vendor 先のスキル実体・.claude 側の参照・lock。
-            # 実測（agent-cli-skills / yadori / life-plan-app / fandhe-backend /
-            # pet-hub / baby-tasks-app の直近同期 PR）でもこの 3 種のみだった
-            allow_re='^(\.agents/skills/|\.claude/skills/|skills-lock\.json$)'
-            while IFS=$'\t' read -r status f prev; do
-              if [ -z "${f}" ]; then
-                continue
-              fi
-              if ! printf '%s\n' "${f}" | grep -qE "${allow_re}"; then
-                emit false "同期の範囲外のファイルを含む: ${f}"
-              fi
-              # rename は新旧の両方が許可範囲に無ければ認めない（旧側の削除が隠れる）
-              if [ "${status}" = renamed ]; then
-                if [ -z "${prev}" ]; then
-                  emit false "rename の旧パスを取得できない: ${f}"
-                fi
-                if ! printf '%s\n' "${prev}" | grep -qE "${allow_re}"; then
-                  emit false "許可範囲外からの rename を含む: ${prev} -> ${f}"
-                fi
-              fi
-            done < <(printf '%s\n' "${files}")
-          else
-            # submodule-update が触るのは .gitmodules に登録済み submodule の gitlink
-            # だけで、.gitmodules 自体は変更しない。許可パスはリポジトリごとに異なる
-            # ため、base コミットの .gitmodules（PR 側の内容は信用しない）から実測する。
-            # .gitmodules 自体が変更されている PR は許可集合に載らず skip されない
-            # （url の差し替えでサプライチェーンを乗っ取る経路を塞ぐ。PR #87 の
-            # codex P0 / Bugbot High）
-            if ! gitmodules=$(gh api \
-                  -H "Accept: application/vnd.github.raw" \
-                  "repos/${REPO}/contents/.gitmodules?ref=${BASE_SHA}"); then
-              emit false "base の .gitmodules を取得できなかった"
+          # カンマ区切りを trim して配列化。空要素は無視する
+          prefixes=()
+          while IFS= read -r p; do
+            p="${p#"${p%%[![:space:]]*}"}"
+            p="${p%"${p##*[![:space:]]}"}"
+            if [ -n "${p}" ]; then
+              prefixes+=("${p}")
             fi
-            sub_paths=$(printf '%s\n' "${gitmodules}" \
-              | sed -n 's/^[[:space:]]*path[[:space:]]*=[[:space:]]*//p' \
-              | sed 's/[[:space:]]*$//')
-            if [ -z "${sub_paths}" ]; then
-              emit false ".gitmodules から submodule のパスを抽出できなかった"
-            fi
-            # パス名の一致だけでは、登録済み submodule を通常ファイル・symlink・
-            # ディレクトリへ置換した変更や削除も通ってしまう。base と head の双方で
-            # エントリが gitlink であることを Git Trees API の契約
-            # （mode=160000 / type=commit）で実測する。contents API の
-            # type=submodule は実測では現行 API でも返るが、将来の major version で
-            # 変わり得ると GitHub が予告している値であり、判定の根拠には使わない
-            # （PR #87 codex P1）。tree は ref ごとに 1 回だけ取得する
-            for ref in "${BASE_SHA}" "${HEAD_SHA}"; do
-              if ! tree=$(gh api "repos/${REPO}/git/trees/${ref}?recursive=1" \
-                    --jq '(if .truncated then "TRUNCATED" else empty end),
-                          (.tree[] | [.path, .mode, .type] | @tsv)'); then
-                emit false "tree を取得できない: ${ref}"
-              fi
-              # truncated な tree は「該当エントリが無い」ことの証明にならない
-              if printf '%s\n' "${tree}" | grep -qx TRUNCATED; then
-                emit false "tree が truncated で全エントリを確認できない: ${ref}"
-              fi
-              if [ "${ref}" = "${BASE_SHA}" ]; then base_tree="${tree}"; else head_tree="${tree}"; fi
-            done
+          done < <(printf '%s\n' "${SKIP_PREFIXES}" | tr ',' '\n')
 
-            while IFS=$'\t' read -r status f prev; do
-              if [ -z "${f}" ]; then
-                continue
-              fi
-              if ! printf '%s\n' "${sub_paths}" | grep -qxF "${f}"; then
-                emit false "submodule の gitlink 以外を含む: ${f}"
-              fi
-              if [ "${status}" = renamed ]; then
-                emit false "submodule 同期に rename は現れない: ${prev} -> ${f}"
-              fi
-              for side in base head; do
-                if [ "${side}" = base ]; then tree="${base_tree}"; else tree="${head_tree}"; fi
-                entry=$(printf '%s\n' "${tree}" \
-                  | awk -F'\t' -v p="${f}" '$1 == p { print $2 "/" $3; exit }')
-                if [ "${entry}" != "160000/commit" ]; then
-                  emit false "gitlink ではない変更を含む: ${f} の ${side} 側は ${entry:-不在}"
-                fi
-              done
-            done < <(printf '%s\n' "${files}")
+          if [ "${#prefixes[@]}" -eq 0 ]; then
+            emit false "有効な接頭辞が 1 つも指定されていない"
           fi
 
-          emit true "生成された同期 PR と実測で確認できた (kind=${kind}, files=${count})"
+          for prefix in "${prefixes[@]}"; do
+            # case のパターンは変数展開をクォートしてリテラル比較にし、末尾の * だけを
+            # glob として効かせる（接頭辞内の * や ? をパターンとして解釈させない）
+            case "${HEAD_REF}" in
+              "${prefix}"*) emit true "head branch が skip 接頭辞に一致 (${prefix} → ${HEAD_REF})" ;;
+            esac
+          done
+
+          emit false "head branch がどの skip 接頭辞にも一致しない (${HEAD_REF})"
 
   codex:
     runs-on: ${{ inputs.runner-label }}
@@ -274,20 +202,21 @@ jobs:
     # (1) CODEX_HOME_DIR 未設定（runner 未準備）の間は実行しない
     #     （vars は呼び出し側リポジトリ／org の Actions variables を参照する）
     # (2) fork PR では untrusted コードを self-hosted runner で実行しない（fail-closed）
-    # (3) sync-gate が「同期 PR と実測で確認できた」と判定した場合のみレビューを外す
-    #     （skip-sync-pr-review: true の呼び出し側でのみ起動する。判定根拠は同ジョブの注記）。
+    # (3) skip-gate が「skip 対象の接頭辞に一致した」と判定した場合のみレビューを外す
+    #     （skip-branch-prefixes または deprecated な skip-sync-pr-review 指定の呼び出し側で
+    #     のみ起動する。判定根拠は同ジョブの注記）。
     #     skip は job 単位に留める。check-run 自体は "skipped" 結論で生成されるため
     #     required status check を満たせる。workflow / paths フィルタで workflow ごと
     #     起動しない形にすると check-run が作られず Expected のまま埋まらないため不可。
-    #     !cancelled() は sync-gate が skip / 失敗したケースを拾うために必要
+    #     !cancelled() は skip-gate が skip / 失敗したケースを拾うために必要
     #     （needs が skip / 失敗すると既定では本ジョブごと skip され、レビューが
     #     静かに消える fail-open になる。判定できなければレビューする側へ倒す）
-    needs: sync-gate
+    needs: skip-gate
     if: >-
       !cancelled() &&
       vars.CODEX_HOME_DIR != '' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.sync-gate.outputs.skip != 'true'
+      needs.skip-gate.outputs.skip != 'true'
     # pull-requests: read は「Collect unresolved review threads」ステップが未解決
     # レビュースレッド一覧を読むためだけに使う読み取り権限。書き込み権限
     # （pull-requests: write）は従来どおり post_feedback ジョブのみが持ち、

@@ -31,11 +31,13 @@ jobs:
     # with:
     #   block-priorities: "P0,P1,P2"
     #
-    # update-external.yml による日次同期 PR をレビュー対象から外す場合は
-    # skip-sync-pr-review を渡す（既定 false。同期 PR は上流の取り込みそのもので、
-    # 指摘の修正先が上流リポジトリにしかないため）。判定は sync-gate ジョブが
-    # 変更ファイル集合を実測して行い、ブランチ名だけでは skip しない。codex ジョブは
+    # 自動生成 PR（update-external.yml による日次同期 PR など）をレビュー対象から
+    # 外す場合は skip する head branch 名の接頭辞をカンマ区切りで渡す（既定は空 =
+    # 全 PR をレビュー。同期 PR は上流の取り込みそのもので、指摘の修正先が上流
+    # リポジトリにしかないため）。判定はブランチ名の接頭辞のみで行うため、push
+    # できる主体は該当接頭辞のブランチで gate を回避できる（受容済み残留リスク。
+    # 第三者の write コラボレーターがいる場合は指定しないこと）。codex ジョブは
     # job 単位で skip され、check-run は skipped 結論で生成されるので required
     # status check は満たされる:
     # with:
-    #   skip-sync-pr-review: true
+    #   skip-branch-prefixes: chore/skills-update,chore/submodule-update
