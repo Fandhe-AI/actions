@@ -27,20 +27,37 @@ inputs:
     default: 'false'
   sanitize-github-extraheader:
     description: >-
-      グローバル git config の `http.*.extraheader` を除去し、公開 repo（例:
-      RustSec/advisory-db）への匿名 fetch へ、永続 self-hosted runner のホスト側に
-      残置した失効済み資格情報（stale credential）が混入して 401 になるのを防ぐ
+      グローバル git config のうち **github.com 向けにスコープされた**
+      `http.<url>.extraheader` のみを除去し、公開 repo（例: RustSec/advisory-db）への
+      匿名 fetch へ、永続 self-hosted runner のホスト側に残置した失効済み資格情報
+      （stale credential）が混入して 401 になるのを防ぐ
       （'true' で有効。既定 'true' = fail-closed でガードを効かせる）。
 
-      除去対象はグローバル git config のみで、`actions/checkout` が正当に書き込む
-      リポジトリローカルの認証設定には触れない。credential helper もグローバルから
-      除去しない（`gh auth setup-git` 等の正当な用途があるため）。credential helper
-      由来の 401 が残る場合は、呼び出し側の該当コマンドに
-      `GIT_CONFIG_GLOBAL=/dev/null` を環境変数として渡す回避策を検討すること。
+      除去対象は github.com にスコープされたグローバル config のみで、他ホスト
+      （private registry・別 Git サーバー等）向けの正当な認証ヘッダーには触れない。
+      `actions/checkout` が正当に書き込むリポジトリローカルの認証設定にも触れない。
+      credential helper もグローバルから除去しない（`gh auth setup-git` 等の正当な
+      用途があるため）。credential helper 由来の 401 が残る場合は、呼び出し側の
+      該当コマンドに `GIT_CONFIG_GLOBAL=/dev/null` を環境変数として渡す回避策を
+      検討すること。
+
+      グローバルに host 非限定（全ホスト対象）の `http.extraheader` が設定されている
+      場合、対象ホストを安全に絞り込めない（他ホストの認証を壊さずに github.com 分
+      だけ除去できない）ため削除はしない。ただしこの設定は github.com へも
+      適用されうるため、除去後の検証で github.com 向けに実効値が残っていると
+      判明した場合はジョブを **fail-closed で失敗させる**（黙って残置させて 401 を
+      再発させない、かつ黙って他ホストの認証を壊さないための設計）。host 非限定の
+      設定が github.com とは無関係な用途（例: private registry のみ）であれば、
+      本ガードはジョブを失敗させない。この場合は runner ホスト側で host 非限定の
+      設定を見直すこと。
+
+      除去後は `git config --global --get-urlmatch http.extraheader https://github.com/`
+      で github.com 向け実効値が残っていないことを検証し、残っていればジョブを失敗させる。
 
       根本原因（ホスト側の残置資格情報）の恒久対応は runner ホスト側で行う
       （本 input は CI 側の多層防御の 1 層であり、根本対応の代替ではない）。
-      互換問題が起きた場合の escape hatch として 'false' で無効化できる。
+      互換問題が起きた場合の escape hatch として 'false' で無効化できる
+      （ただし無効化すると本 input が防ぐ 401 を再発させうる）。
     required: false
     default: 'true'
 
@@ -70,26 +87,80 @@ runs:
         # 値（トークンを含みうる）は一切出力せず、キー名のみを扱う。
         # グローバル config 不在・extraheader 不在は正常系（冪等）として扱う。
         # サブセクション（URL スコープ）は任意: `http.https://github.com/.extraheader` の
-        # ような URL スコープ付きだけでなく、`http.extraheader`（全 HTTPS host に無条件で
-        # 適用される、URL スコープ付きより悪質な形）も拾う必要があるため
+        # ような URL スコープ付きだけでなく、`http.extraheader`（全ホストに無条件で
+        # 適用される、URL スコープ付きより悪質な形）も検出対象にする必要があるため
         # `^http\.(.*\.)?extraheader$` とする（`^http\..*\.extraheader$` だとサブセクションを
         # 必須にしてしまい、この無条件形を検出できない）。
-        keys="$(git config --global --name-only --get-regexp '^http\.(.*\.)?extraheader$' 2>/dev/null || true)"
+        #
+        # `--get-regexp` は「マッチ無し」を exit 1 で表す一方、config 破損等の
+        # 実エラーも非 0 で返す。`|| true` で握り潰すと config 破損時に
+        # 「stale credential 無し」と誤認して fail-open になるため、exit code を
+        # 明示的に判定する（1 = マッチ無し = 正常系、それ以外 = エラー）。
+        set +e
+        keys="$(git config --global --name-only --get-regexp '^http\.(.*\.)?extraheader$' 2>/dev/null)"
+        get_rc=$?
+        set -e
+
+        if [ "${get_rc}" -ne 0 ] && [ "${get_rc}" -ne 1 ]; then
+          echo "::error::グローバル git config の読み取りに失敗しました（exit ${get_rc}）。config が破損している可能性があります"
+          exit 1
+        fi
 
         if [ -z "${keys}" ]; then
           exit 0
         fi
 
+        # 除去対象は github.com にスコープされたキーのみへ限定する（他ホスト向けの
+        # 正当な認証ヘッダーを壊さないため）。host 非限定の `http.extraheader` は
+        # 対象ホストを安全に絞り込めないため削除せず、fail-closed で失敗させる
+        # （黙って残置＝401 再発、黙って全除去＝他ホスト認証破壊、のどちらも避ける）。
+        github_keys=""
+        unconditional_present=false
         while IFS= read -r key; do
           [ -z "${key}" ] && continue
-          if git config --global --unset-all -- "${key}" 2>/dev/null; then
+          if [ "${key}" = "http.extraheader" ]; then
+            unconditional_present=true
+            continue
+          fi
+          lower_key="$(printf '%s' "${key}" | tr '[:upper:]' '[:lower:]')"
+          case "${lower_key}" in
+            http.https://github.com.extraheader|http.https://github.com/*.extraheader|http.https://github.com:*.extraheader|http.http://github.com.extraheader|http.http://github.com/*.extraheader|http.http://github.com:*.extraheader)
+              github_keys="${github_keys}${key}"$'\n'
+              ;;
+          esac
+        done <<< "${keys}"
+
+        # host 非限定キーの存在自体では失敗させない（github.com と無関係な
+        # private registry 等のためだけに設定されているケースまで壊すため）。
+        # 実際に github.com へ影響するかどうかは、除去後の urlmatch 検証で判定する。
+
+        if [ -n "${github_keys}" ]; then
+          while IFS= read -r key; do
+            [ -z "${key}" ] && continue
+            if ! git config --global --unset-all -- "${key}"; then
+              echo "::error::グローバル git config のキー除去に失敗しました（キー: ${key}）。stale credential が残存する可能性があるためジョブを失敗させます"
+              exit 1
+            fi
             # key はユーザー入力ではなく git config のキー名だが、
             # workflow command 行へ値を混ぜないよう別 echo 行に分離する。
             echo "::notice::stale な GitHub 資格情報をグローバル git config から除去しました（キー: ${key}）"
+          done <<< "${github_keys}"
+        fi
+
+        # 除去後の検証（fail-closed）: github.com への実効 extraheader が
+        # 本当に残っていないことを urlmatch で確認する。これは github.com スコープの
+        # キーの除去漏れだけでなく、host 非限定の `http.extraheader`（削除せずに
+        # 残した分）が実際に github.com へ適用されてしまうケースも検出する。
+        # 残っていればガード失敗とする（黙って 401 を再発させない）。
+        remaining="$(git config --global --get-urlmatch http.extraheader https://github.com/ 2>/dev/null || true)"
+        if [ -n "${remaining}" ]; then
+          if [ "${unconditional_present}" = "true" ]; then
+            echo "::error::グローバル git config に host 非限定の http.extraheader（全ホスト対象）が存在し、github.com にも適用されています。他ホストの認証を壊さずに github.com 分のみを安全に除去できないため、ガードを失敗させます。runner ホスト側でこの設定を見直してください"
           else
-            echo "::warning::グローバル git config のキー除去に失敗しました（キー: ${key}）。ガード自体はジョブを継続します"
+            echo "::error::除去後も github.com 向け extraheader が実効値として残存しています。ガードに失敗しました"
           fi
-        done <<< "${keys}"
+          exit 1
+        fi
 
     # 後続の「Sync toolchain」の前提（rustup show の実行可否）を満たしているか検証する。
     # 健全な導入済み環境では何もしない（冪等・追加コストほぼゼロ）。
