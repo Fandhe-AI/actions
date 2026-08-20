@@ -80,9 +80,20 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ "${SANITIZE}" != "true" ]; then
-          exit 0
-        fi
+        # 'true'/'false' のみを明示的に受理する。typo・空白・大文字表記等の
+        # 不正な値を「無効化」として黙って通すと fail-closed 設計が崩れるため、
+        # 想定外の値はエラー終了とする。
+        case "${SANITIZE}" in
+          true)
+            ;;
+          false)
+            exit 0
+            ;;
+          *)
+            echo "::error::sanitize-github-extraheader には 'true' または 'false' を指定してください（実際の値: ${SANITIZE}）"
+            exit 1
+            ;;
+        esac
 
         # 値（トークンを含みうる）は一切出力せず、キー名のみを扱う。
         # グローバル config 不在・extraheader 不在は正常系（冪等）として扱う。
@@ -137,8 +148,15 @@ runs:
         if [ -n "${github_keys}" ]; then
           while IFS= read -r key; do
             [ -z "${key}" ] && continue
-            if ! git config --global --unset-all -- "${key}"; then
-              echo "::error::グローバル git config のキー除去に失敗しました（キー: ${key}）。stale credential が残存する可能性があるためジョブを失敗させます"
+            set +e
+            git config --global --unset-all -- "${key}"
+            unset_rc=$?
+            set -e
+            # exit 5 = 「キーが既に存在しない」（git config の仕様上の正常系）。
+            # 並行実行される sanitize ステップ等が先に除去済みの場合に発生しうるため、
+            # 冪等性のために許容する。それ以外の非 0 は実エラーとして fail-closed にする。
+            if [ "${unset_rc}" -ne 0 ] && [ "${unset_rc}" -ne 5 ]; then
+              echo "::error::グローバル git config のキー除去に失敗しました（キー: ${key}, exit ${unset_rc}）。stale credential が残存する可能性があるためジョブを失敗させます"
               exit 1
             fi
             # key はユーザー入力ではなく git config のキー名だが、
@@ -152,8 +170,20 @@ runs:
         # キーの除去漏れだけでなく、host 非限定の `http.extraheader`（削除せずに
         # 残した分）が実際に github.com へ適用されてしまうケースも検出する。
         # 残っていればガード失敗とする（黙って 401 を再発させない）。
-        remaining="$(git config --global --get-urlmatch http.extraheader https://github.com/ 2>/dev/null || true)"
-        if [ -n "${remaining}" ]; then
+        # --get-urlmatch の exit code: 0 = 実効値あり, 1 = マッチ無し（正常系）,
+        # それ以外 = config 破損等の実エラー。`|| true` で握り潰すと読み取り異常時に
+        # 「実効値なし」と誤判定して fail-open になるため、exit code を明示的に判定する。
+        set +e
+        remaining="$(git config --global --get-urlmatch http.extraheader https://github.com/ 2>/dev/null)"
+        urlmatch_rc=$?
+        set -e
+
+        if [ "${urlmatch_rc}" -ne 0 ] && [ "${urlmatch_rc}" -ne 1 ]; then
+          echo "::error::除去後の検証で、グローバル git config の読み取りに失敗しました（exit ${urlmatch_rc}）。config が破損している可能性があるためガードを失敗させます"
+          exit 1
+        fi
+
+        if [ "${urlmatch_rc}" -eq 0 ] && [ -n "${remaining}" ]; then
           if [ "${unconditional_present}" = "true" ]; then
             echo "::error::グローバル git config に host 非限定の http.extraheader（全ホスト対象）が存在し、github.com にも適用されています。他ホストの認証を壊さずに github.com 分のみを安全に除去できないため、ガードを失敗させます。runner ホスト側でこの設定を見直してください"
           else
