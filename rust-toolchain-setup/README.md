@@ -22,19 +22,23 @@ runner の rustup を検証し、リポジトリの `rust-toolchain.toml` にツ
   ホスト三つ組を取得できない場合は判定を諦めて `rustup component add` に倒す）
 - **stale credential ガード（既定 fail-closed で有効）**: 先頭ステップで
   グローバル git config のうち **github.com にスコープされた**
-  `http.<url>.extraheader` のみを除去してから後続処理へ進む（他ホスト向けの
-  認証ヘッダーには触れない）。永続 self-hosted runner のホスト側に失効済み
-  トークンが残置していると、公開 repo（例: `cargo audit` / `cargo deny` が
-  fetch する `RustSec/advisory-db`）への本来認証不要な匿名 fetch にまで混入し、
-  断続的な HTTP 401（flaky な症状として観測される）を引き起こす。本ステップは
-  これを CI 側で防ぐ多層防御の 1 層であり、`sanitize-github-extraheader: 'false'`
-  で無効化できる。除去後は github.com 向けの実効 extraheader が残っていないか
-  `--get-urlmatch` で検証し、除去失敗、または検証の結果 github.com 向けに
-  実効値が残っている場合（github.com スコープのキーの除去漏れ、または
-  host 非限定の `http.extraheader` が実際に github.com にも適用されているケース）
-  はジョブを失敗させる（fail-closed。host 非限定の設定は他ホストの認証を壊さずに
-  github.com 分だけを安全に絞り込めないため削除しない。github.com と無関係な
-  host 非限定設定であればガードはジョブを失敗させない）
+  `http.<url>.extraheader` を取り除いた**ジョブ専用の隔離コピー**を作成し、
+  `GIT_CONFIG_GLOBAL` を `$GITHUB_ENV` 経由で以降のステップにのみ適用する
+  （**runner ホストの実 global config ファイルは書き換えない**。他ホスト向け
+  認証ヘッダーはコピーへそのまま引き継がれ、実ファイルからも消えないため、
+  並行実行中の他ジョブや本ジョブ以外の用途を壊さない）。永続 self-hosted
+  runner のホスト側に失効済みトークンが残置していると、公開 repo（例:
+  `cargo audit` / `cargo deny` が fetch する `RustSec/advisory-db`）への
+  本来認証不要な匿名 fetch にまで混入し、断続的な HTTP 401（flaky な症状として
+  観測される）を引き起こす。本ステップはこれを CI 側で防ぐ多層防御の 1 層で
+  あり、`sanitize-github-extraheader: 'false'` で無効化できる。隔離コピー
+  作成後は github.com 向けの実効 extraheader が残っていないか
+  `--get-urlmatch` で検証し、検証失敗、または github.com 向けに実効値が
+  残っている場合（github.com スコープのキーの複製漏れ、または host 非限定の
+  `http.extraheader` が実際に github.com にも適用されているケース）は
+  ジョブを失敗させる（fail-closed。host 非限定の設定は他ホストの認証を壊さずに
+  github.com 分だけを安全に絞り込めないためコピーからも取り除かない。
+  github.com と無関係な host 非限定設定であればガードはジョブを失敗させない）
 
 ## 前提条件
 
@@ -108,7 +112,7 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 |---|---|---|---|
 | `components` | No | `''` | 追加でインストールする rustup コンポーネント（カンマ区切り。例: `llvm-tools-preview`）。`rust-toolchain.toml` の `components` に列挙済みのものは指定不要 |
 | `allow-network-install` | No | `'false'` | rustup 未導入・破損時にネットワークから rustup-init を取得して導入することを許可する。既定は fail-closed。使い捨ての GitHub ホストランナーや、供給網リスクを許容できる環境でのみ `'true'` にする |
-| `sanitize-github-extraheader` | No | `'true'` | グローバル git config のうち github.com にスコープされた `http.<url>.extraheader` のみを除去し、公開 repo への匿名 fetch へ stale credential が混入するのを防ぐ。他ホスト向け認証ヘッダー・リポジトリローカル config には触れない。除去・検証に失敗した場合、または除去後も github.com 向け実効値が残っている場合（host 非限定の `http.extraheader` が github.com にも適用されているケース含む）はジョブを失敗させる（fail-closed）。互換問題時のみ `'false'` で無効化する |
+| `sanitize-github-extraheader` | No | `'true'` | グローバル git config のうち github.com にスコープされた `http.<url>.extraheader` を取り除いたジョブ専用の隔離コピーを作成し、`GIT_CONFIG_GLOBAL` で以降のステップにのみ適用する（runner ホストの実 global config ファイルは書き換えない）。他ホスト向け認証ヘッダー・リポジトリローカル config には触れない。隔離コピー作成・検証に失敗した場合、またはコピーに対する検証で github.com 向け実効値が残っている場合（host 非限定の `http.extraheader` が github.com にも適用されているケース含む）はジョブを失敗させる（fail-closed）。互換問題時のみ `'false'` で無効化する |
 
 ## 参照バージョン（`@latest`）
 
@@ -138,15 +142,21 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 - **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
   ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
   利用が制限されている場合は許可が必要
-- **stale credential ガードの適用範囲**: 除去対象はグローバル git config のうち
-  github.com にスコープされた `extraheader` のみで、他ホスト向けの extraheader や
-  `git config --global` に登録された credential helper（`gh auth setup-git` 等が
-  設定するもの）は除去しない。credential helper 由来の 401 が残る場合は、
-  当該コマンドの実行時のみ `GIT_CONFIG_GLOBAL=/dev/null` を環境変数として渡し、
-  グローバル config そのものを無効化する回避策を検討すること。
+- **stale credential ガードの適用範囲**: 隔離コピーから取り除く対象はグローバル
+  git config のうち github.com にスコープされた `extraheader` のみで、他ホスト
+  向けの extraheader や `git config --global` に登録された credential helper
+  （`gh auth setup-git` 等が設定するもの）は取り除かない。credential helper
+  由来の 401 が残る場合は、当該コマンドの実行時のみ `GIT_CONFIG_GLOBAL=/dev/null`
+  を環境変数として渡し、グローバル config そのものを無効化する回避策を検討すること。
   グローバルに host 非限定の `http.extraheader`（全ホスト対象）が設定されている
-  runner では、github.com 分だけを安全に絞り込めないため削除はしないが、その値が
-  実際に github.com へ適用される（除去後の urlmatch 検証で検出される）場合は
-  ガードがジョブを失敗させる。この場合は runner ホスト側で host 非限定の設定を
-  github.com スコープ付きへ書き換えるなど、runner ホスト側の運用
-  （イメージ／セットアップの見直し）で対応する
+  runner では、github.com 分だけを安全に絞り込めないため隔離コピーからも
+  取り除かないが、その値が実際に github.com へ適用される（隔離コピーに対する
+  urlmatch 検証で検出される）場合はガードがジョブを失敗させる。この場合は
+  runner ホスト側で host 非限定の設定を github.com スコープ付きへ書き換えるなど、
+  runner ホスト側の運用（イメージ／セットアップの見直し）で対応する
+- **`GIT_CONFIG_GLOBAL` の副作用**: 本ガードが実際にキーを取り除く必要がある
+  場合（github.com スコープの `extraheader` が存在する場合）、`GIT_CONFIG_GLOBAL`
+  を `$GITHUB_ENV` 経由でジョブ専用の隔離コピーへ差し替える。以降のステップで
+  `git config --global` を直接操作するカスタムステップを追加する場合は、
+  この隔離コピーを参照している点に注意すること（runner ホストの実
+  `~/.gitconfig` ではない）

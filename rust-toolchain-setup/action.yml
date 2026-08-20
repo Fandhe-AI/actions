@@ -28,31 +28,36 @@ inputs:
   sanitize-github-extraheader:
     description: >-
       グローバル git config のうち **github.com 向けにスコープされた**
-      `http.<url>.extraheader` のみを除去し、公開 repo（例: RustSec/advisory-db）への
+      `http.<url>.extraheader` を、公開 repo（例: RustSec/advisory-db）への
       匿名 fetch へ、永続 self-hosted runner のホスト側に残置した失効済み資格情報
-      （stale credential）が混入して 401 になるのを防ぐ
+      （stale credential）が混入して 401 になるのを防ぐために取り除く
       （'true' で有効。既定 'true' = fail-closed でガードを効かせる）。
 
-      除去対象は github.com にスコープされたグローバル config のみで、他ホスト
-      （private registry・別 Git サーバー等）向けの正当な認証ヘッダーには触れない。
+      **runner ホストの実 global config ファイルは一切書き換えない。** 該当キーを
+      除いた内容をジョブ専用の隔離コピー（`${RUNNER_TEMP}` 配下、パーミッション 600）
+      へ複製し、`GIT_CONFIG_GLOBAL` を `$GITHUB_ENV` 経由で当該コピーに向けることで、
+      本ジョブの以降のステップにのみ適用する。他ホスト（private registry・別 Git
+      サーバー等）向けの正当な認証ヘッダーはコピーにそのまま引き継がれ、実ファイル
+      からも消えないため、並行実行中の他ジョブや本ジョブ以外の用途を壊さない。
       `actions/checkout` が正当に書き込むリポジトリローカルの認証設定にも触れない。
-      credential helper もグローバルから除去しない（`gh auth setup-git` 等の正当な
+      credential helper もコピーからは除去しない（`gh auth setup-git` 等の正当な
       用途があるため）。credential helper 由来の 401 が残る場合は、呼び出し側の
       該当コマンドに `GIT_CONFIG_GLOBAL=/dev/null` を環境変数として渡す回避策を
       検討すること。
 
       グローバルに host 非限定（全ホスト対象）の `http.extraheader` が設定されている
       場合、対象ホストを安全に絞り込めない（他ホストの認証を壊さずに github.com 分
-      だけ除去できない）ため削除はしない。ただしこの設定は github.com へも
-      適用されうるため、除去後の検証で github.com 向けに実効値が残っていると
-      判明した場合はジョブを **fail-closed で失敗させる**（黙って残置させて 401 を
-      再発させない、かつ黙って他ホストの認証を壊さないための設計）。host 非限定の
-      設定が github.com とは無関係な用途（例: private registry のみ）であれば、
-      本ガードはジョブを失敗させない。この場合は runner ホスト側で host 非限定の
-      設定を見直すこと。
+      だけ除去できない）ため隔離コピーからも取り除かない。ただしこの設定は
+      github.com へも適用されうるため、隔離コピーに対する検証で github.com 向けに
+      実効値が残っていると判明した場合はジョブを **fail-closed で失敗させる**
+      （黙って残置させて 401 を再発させない、かつ黙って他ホストの認証を壊さない
+      ための設計）。host 非限定の設定が github.com とは無関係な用途（例: private
+      registry のみ）であれば、本ガードはジョブを失敗させない。この場合は runner
+      ホスト側で host 非限定の設定を見直すこと。
 
-      除去後は `git config --global --get-urlmatch http.extraheader https://github.com/`
-      で github.com 向け実効値が残っていないことを検証し、残っていればジョブを失敗させる。
+      隔離コピー作成後は `GIT_CONFIG_GLOBAL=<コピー> git config --get-urlmatch
+      http.extraheader https://github.com/` で github.com 向け実効値が残っていない
+      ことを検証し、残っていればジョブを失敗させる。
 
       根本原因（ホスト側の残置資格情報）の恒久対応は runner ホスト側で行う
       （本 input は CI 側の多層防御の 1 層であり、根本対応の代替ではない）。
@@ -70,9 +75,14 @@ runs:
     # に混入し、本来認証不要な公開 repo への fetch が 401 で失敗する
     # （2026-08-19 観測。runner 再割当で pass する flaky な症状として現れた）。
     # 恒久対応（ホスト側残置資格情報の除去）は runner ホスト側の別イシューのスコープ。
-    # 本ステップは CI 側の防御層として、rust 系ジョブの共通入口である本 action の
-    # 先頭で毎回グローバル config を除染する。リポジトリローカル config
-    # （actions/checkout が書き込む正当な認証設定）には触れない。
+    #
+    # 本ステップは runner ホストの実 global config ファイルを直接書き換えない。
+    # 該当キーを除いたジョブ専用の隔離コピーを作成し、GIT_CONFIG_GLOBAL で
+    # 以降のステップにのみ適用する。実ファイルへの `--unset-all` は、それが
+    # stale かどうかを判定できないまま正当な資格情報（並行実行中の他ジョブや
+    # private dependency 取得が使うもの）まで永続的に破壊しうるため行わない。
+    # リポジトリローカル config（actions/checkout が書き込む正当な認証設定）
+    # には触れない。
     - name: Sanitize stale GitHub credentials in global git config
       env:
         SANITIZE: ${{ inputs.sanitize-github-extraheader }}
@@ -82,7 +92,8 @@ runs:
 
         # 'true'/'false' のみを明示的に受理する。typo・空白・大文字表記等の
         # 不正な値を「無効化」として黙って通すと fail-closed 設計が崩れるため、
-        # 想定外の値はエラー終了とする。
+        # 想定外の値はエラー終了とする。値そのものは workflow command 行へ
+        # 混ぜない（改行や `::` を含む値による log/command 注入を避けるため）。
         case "${SANITIZE}" in
           true)
             ;;
@@ -90,7 +101,7 @@ runs:
             exit 0
             ;;
           *)
-            echo "::error::sanitize-github-extraheader には 'true' または 'false' を指定してください（実際の値: ${SANITIZE}）"
+            echo "::error::sanitize-github-extraheader には 'true' または 'false' のみ指定できます"
             exit 1
             ;;
         esac
@@ -107,13 +118,16 @@ runs:
         # 実エラーも非 0 で返す。`|| true` で握り潰すと config 破損時に
         # 「stale credential 無し」と誤認して fail-open になるため、exit code を
         # 明示的に判定する（1 = マッチ無し = 正常系、それ以外 = エラー）。
+        #
+        # ここでの `git config --global` は、呼び出し側ジョブが既に GIT_CONFIG_GLOBAL
+        # を設定済みであればそれを尊重する（git 自体の解決規則に委ねる）。
         set +e
         keys="$(git config --global --name-only --get-regexp '^http\.(.*\.)?extraheader$' 2>/dev/null)"
         get_rc=$?
         set -e
 
         if [ "${get_rc}" -ne 0 ] && [ "${get_rc}" -ne 1 ]; then
-          echo "::error::グローバル git config の読み取りに失敗しました（exit ${get_rc}）。config が破損している可能性があります"
+          echo "::error::グローバル git config の読み取りに失敗しました。config が破損している可能性があります"
           exit 1
         fi
 
@@ -121,10 +135,11 @@ runs:
           exit 0
         fi
 
-        # 除去対象は github.com にスコープされたキーのみへ限定する（他ホスト向けの
+        # 隔離対象は github.com にスコープされたキーのみへ限定する（他ホスト向けの
         # 正当な認証ヘッダーを壊さないため）。host 非限定の `http.extraheader` は
-        # 対象ホストを安全に絞り込めないため削除せず、fail-closed で失敗させる
-        # （黙って残置＝401 再発、黙って全除去＝他ホスト認証破壊、のどちらも避ける）。
+        # 対象ホストを安全に絞り込めないため隔離コピーからも取り除かず、
+        # fail-closed で失敗させる（黙って残置＝401 再発、黙って全除去＝他ホスト
+        # 認証破壊、のどちらも避ける）。
         github_keys=""
         unconditional_present=false
         while IFS= read -r key; do
@@ -143,43 +158,79 @@ runs:
 
         # host 非限定キーの存在自体では失敗させない（github.com と無関係な
         # private registry 等のためだけに設定されているケースまで壊すため）。
-        # 実際に github.com へ影響するかどうかは、除去後の urlmatch 検証で判定する。
+        # 実際に github.com へ影響するかどうかは、隔離コピーに対する urlmatch
+        # 検証で判定する。
 
-        if [ -n "${github_keys}" ]; then
-          while IFS= read -r key; do
-            [ -z "${key}" ] && continue
-            set +e
-            git config --global --unset-all -- "${key}"
-            unset_rc=$?
-            set -e
-            # exit 5 = 「キーが既に存在しない」（git config の仕様上の正常系）。
-            # 並行実行される sanitize ステップ等が先に除去済みの場合に発生しうるため、
-            # 冪等性のために許容する。それ以外の非 0 は実エラーとして fail-closed にする。
-            if [ "${unset_rc}" -ne 0 ] && [ "${unset_rc}" -ne 5 ]; then
-              echo "::error::グローバル git config のキー除去に失敗しました（キー: ${key}, exit ${unset_rc}）。stale credential が残存する可能性があるためジョブを失敗させます"
-              exit 1
-            fi
-            # key はユーザー入力ではなく git config のキー名だが、
-            # workflow command 行へ値を混ぜないよう別 echo 行に分離する。
-            echo "::notice::stale な GitHub 資格情報をグローバル git config から除去しました（キー: ${key}）"
-          done <<< "${github_keys}"
+        if [ -z "${github_keys}" ] && [ "${unconditional_present}" = false ]; then
+          exit 0
         fi
 
-        # 除去後の検証（fail-closed）: github.com への実効 extraheader が
+        # ここから: 実 global config は書き換えず、除去済みの内容を
+        # ジョブ専用の隔離コピーへ複製する（$RUNNER_TEMP 配下、他ジョブ・
+        # 他ユーザーから読めないようパーミッションを絞る）。`git config --list -z`
+        # で得られる値はマージ済みの実効値そのものであり、include/includeIf を
+        # 経由する断片も展開済みとして複製されるため、コピー先で include の
+        # 相対パス解決が壊れる心配がない。
+        tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/git-global-sanitized.XXXXXX")"
+        chmod 700 "${tmp_dir}"
+        copy="${tmp_dir}/gitconfig"
+        : > "${copy}"
+        chmod 600 "${copy}"
+
+        set +e
+        git config --global --list -z >"${tmp_dir}/list.raw" 2>/dev/null
+        list_rc=$?
+        set -e
+
+        if [ "${list_rc}" -ne 0 ] && [ "${list_rc}" -ne 1 ]; then
+          echo "::error::グローバル git config の隔離コピー作成に失敗しました（一覧取得エラー）"
+          exit 1
+        fi
+
+        while IFS= read -r -d '' entry; do
+          [ -z "${entry}" ] && continue
+          entry_key="${entry%%$'\n'*}"
+          entry_value="${entry#*$'\n'}"
+          skip=false
+          if [ -n "${github_keys}" ]; then
+            while IFS= read -r gk; do
+              [ -z "${gk}" ] && continue
+              if [ "${entry_key}" = "${gk}" ]; then
+                skip=true
+                break
+              fi
+            done <<< "${github_keys}"
+          fi
+          if [ "${skip}" = true ]; then
+            continue
+          fi
+          if ! git config --file "${copy}" --add -- "${entry_key}" "${entry_value}"; then
+            echo "::error::グローバル git config の隔離コピー作成に失敗しました（キーの複製に失敗）"
+            exit 1
+          fi
+        done < "${tmp_dir}/list.raw"
+
+        if [ -n "${github_keys}" ]; then
+          count="$(printf '%s\n' "${github_keys}" | grep -c .)"
+          # count は算出した件数であり、任意入力ではないため直接出力してよい。
+          echo "::notice::stale な可能性がある GitHub 資格情報をジョブ専用の隔離済み global git config へ切り離しました（該当キー数: ${count} 件。runner ホストの実ファイルは変更していません）"
+        fi
+
+        # 隔離コピーに対する検証（fail-closed）: github.com への実効 extraheader が
         # 本当に残っていないことを urlmatch で確認する。これは github.com スコープの
-        # キーの除去漏れだけでなく、host 非限定の `http.extraheader`（削除せずに
-        # 残した分）が実際に github.com へ適用されてしまうケースも検出する。
+        # キーの複製漏れだけでなく、host 非限定の `http.extraheader`（取り除かずに
+        # コピーへ残した分）が実際に github.com へ適用されてしまうケースも検出する。
         # 残っていればガード失敗とする（黙って 401 を再発させない）。
         # --get-urlmatch の exit code: 0 = 実効値あり, 1 = マッチ無し（正常系）,
         # それ以外 = config 破損等の実エラー。`|| true` で握り潰すと読み取り異常時に
         # 「実効値なし」と誤判定して fail-open になるため、exit code を明示的に判定する。
         set +e
-        remaining="$(git config --global --get-urlmatch http.extraheader https://github.com/ 2>/dev/null)"
+        remaining="$(GIT_CONFIG_GLOBAL="${copy}" git config --get-urlmatch http.extraheader https://github.com/ 2>/dev/null)"
         urlmatch_rc=$?
         set -e
 
         if [ "${urlmatch_rc}" -ne 0 ] && [ "${urlmatch_rc}" -ne 1 ]; then
-          echo "::error::除去後の検証で、グローバル git config の読み取りに失敗しました（exit ${urlmatch_rc}）。config が破損している可能性があるためガードを失敗させます"
+          echo "::error::除去後の検証で、隔離コピーの読み取りに失敗しました。config が破損している可能性があるためガードを失敗させます"
           exit 1
         fi
 
@@ -187,10 +238,14 @@ runs:
           if [ "${unconditional_present}" = "true" ]; then
             echo "::error::グローバル git config に host 非限定の http.extraheader（全ホスト対象）が存在し、github.com にも適用されています。他ホストの認証を壊さずに github.com 分のみを安全に除去できないため、ガードを失敗させます。runner ホスト側でこの設定を見直してください"
           else
-            echo "::error::除去後も github.com 向け extraheader が実効値として残存しています。ガードに失敗しました"
+            echo "::error::隔離コピーでも github.com 向け extraheader が実効値として残存しています。ガードに失敗しました"
           fi
           exit 1
         fi
+
+        # 以降のステップにのみ隔離コピーを適用する（runner ホストの実 global
+        # config はこの時点でも一切変更していない）。
+        echo "GIT_CONFIG_GLOBAL=${copy}" >> "${GITHUB_ENV}"
 
     # 後続の「Sync toolchain」の前提（rustup show の実行可否）を満たしているか検証する。
     # 健全な導入済み環境では何もしない（冪等・追加コストほぼゼロ）。
@@ -269,7 +324,7 @@ runs:
           component="$(printf '%s' "${raw}" | xargs)"
           [ -z "${component}" ] && continue
           if ! printf '%s\n' "${component}" | grep -Eq '^[A-Za-z0-9._-]+$'; then
-            echo "::error::不正なコンポーネント名です: ${component}"
+            echo "::error::components input に許可されない文字を含む値が指定されました（英数字・ドット・アンダースコア・ハイフンのみ許可）"
             exit 1
           fi
           candidates=("${component}")
