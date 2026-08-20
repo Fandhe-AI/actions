@@ -189,14 +189,22 @@ runs:
         # include が中身を読み込めていない（パス解決失敗・権限不足等）可能性が
         # 高い。元ファイルが元々空（エントリ 0 件）の場合はこの限りではない
         # （失うものが無いため）。値は一切出力せず行数のみを見る。
+        # `git config --list` は空/未検出時に非 0 を返すことがあり、`set -e` +
+        # `pipefail` の下でコマンド置換に直接混ぜると、パイプライン中の git の
+        # 終了コードでステップがメッセージ無しに即死する。ここでは常に
+        # `set +e` の中で実行し、握り潰さず後続で明示的に扱う。
         direct_total=0
         for cfg in "${base_configs[@]}"; do
+          set +e
           cfg_lines="$(git config --file "${cfg}" --list 2>/dev/null | wc -l | tr -d ' ')"
+          set -e
           direct_total=$((direct_total + cfg_lines))
         done
 
         if [ "${direct_total}" -gt 0 ]; then
+          set +e
           expanded_lines="$(git config --file "${overlay}" --includes --list 2>/dev/null | wc -l | tr -d ' ')"
+          set -e
           if [ "${expanded_lines}" -le "${own_lines}" ]; then
             echo "::error::グローバル git config のオーバーレイで include が展開されませんでした。include 対象が壊れているか読み取れない可能性があります"
             exit 1
@@ -216,9 +224,14 @@ runs:
         # fail-open になるため、exit code を明示的に判定する。空値（値なし）でも
         # `--get-urlmatch` は rc=0 かつ改行のみ（1 byte）を返しうるため、rc に加えて
         # バイト数（1 byte 超か）でも実効値の有無を判定する。
+        # 注意: `var="$(cmd1 | cmd2)"` の直後の `${PIPESTATUS[@]}` は代入文
+        # そのもの（単一コマンド）の終了コードしか持たず、サブシェル内で完結した
+        # パイプラインの終了コードは反映されない（実測で確認済み。$? は
+        # pipefail がサブシェルにも継承されるため代入文自身の終了コードとして
+        # 正しく反映される）。そのため rc は `$?` を代入直後に取得する。
         set +e
         pre_len="$(git config --file "${overlay}" --includes --get-urlmatch http.extraheader https://github.com/ 2>/dev/null | wc -c | tr -d ' ')"
-        pre_rc="${PIPESTATUS[0]}"
+        pre_rc=$?
         set -e
 
         if [ "${pre_rc}" -ne 0 ] && [ "${pre_rc}" -ne 1 ]; then
@@ -252,7 +265,7 @@ runs:
         # （値は変数に代入せず、rc とバイト数のみを見る）。
         set +e
         after_len="$(git config --file "${overlay}" --includes --get-urlmatch http.extraheader https://github.com/ 2>/dev/null | wc -c | tr -d ' ')"
-        after_rc="${PIPESTATUS[0]}"
+        after_rc=$?
         set -e
 
         if [ "${after_rc}" -ne 0 ] && [ "${after_rc}" -ne 1 ]; then
