@@ -21,9 +21,16 @@ runner の rustup を検証し、リポジトリの `rust-toolchain.toml` にツ
   踏まえ、正規化した候補名との厳密一致で導入済みを判定してスキップする（冪等。
   ホスト三つ組を取得できない場合は判定を諦めて `rustup component add` に倒す）
 - **stale credential ガード（既定 fail-closed で有効）**: 先頭ステップで、元の
-  グローバル git config を `[include]` で取り込んだ上で **github.com 向けの
-  `http.extraheader`（スコープ付き・host 非限定のどちらも）を空値でリセットする**
-  だけの**ジョブ専用オーバーレイ**を作成し、`GIT_CONFIG_GLOBAL` を `$GITHUB_ENV`
+  グローバル git config を `[include]` で取り込んだ上で、**github.com 向けの
+  `http.extraheader` key（base の `http.https://github.com/.extraheader`・
+  パススコープの `http.https://github.com/Org/.extraheader` 等・host 非限定の
+  `http.extraheader`）を名前列挙（`--list --name-only`。値は出力されない）で
+  特定し、key ごとに導出したリセット先 key へ空値を追記してリセットする**
+  （host 非限定 key のリセット先は base key。github.com 向け URL ではより
+  特異的な空の base key が plain key の寄与をクリアし、他ホスト向け URL では
+  plain key の値がそのまま実効に残るため、他ホストの実効値には影響しない。
+  実測済み）だけの**ジョブ専用オーバーレイ**を作成し、
+  `GIT_CONFIG_GLOBAL` を `$GITHUB_ENV`
   経由で以降のステップにのみ適用する（**runner ホストの実 global config ファイルは
   書き換えない。extraheader の値そのものも本ステップのどの変数・コマンドライン
   引数・一時ファイルにも一度も現れない**。他ホスト向け認証ヘッダーは include 元の
@@ -33,10 +40,15 @@ runner の rustup を検証し、リポジトリの `rust-toolchain.toml` にツ
   が fetch する `RustSec/advisory-db`）への本来認証不要な匿名 fetch にまで混入し、
   断続的な HTTP 401（flaky な症状として観測される）を引き起こす。本ステップは
   これを CI 側で防ぐ多層防御の 1 層であり、`sanitize-github-extraheader: 'false'`
-  で無効化できる。オーバーレイ作成後は github.com 向けの実効 extraheader が
-  残っていないか（リポジトリローカル・system config を混ぜない `--file` +
-  `--includes` 経路で）`--get-urlmatch` で検証し、検証失敗、または実効値が
-  残っている場合はジョブを失敗させる（fail-closed）
+  で無効化できる。オーバーレイ作成後は、対象 key ごとに key 名から導出した URL
+  （host 非限定 key は `https://github.com/`）で実効 extraheader が残っていないか
+  （リポジトリローカル・system config を混ぜない `--file` + `--includes` 経路で）
+  `--get-urlmatch` で検証し、さらに対象 key の有無に関わらず base probe
+  （`https://github.com/`）を必ず 1 回実行するバックストップで、名前列挙で
+  特定できない形式（ワイルドカード host `http.https://*.com/.extraheader` 等）の
+  実効値も検知する。検証失敗、または実効値が残っている場合はジョブを失敗させる
+  （fail-closed。バックストップ検知時は自動リセットを試みず、runner ホスト側での
+  当該 key の除去が必要）
 
 ## 前提条件
 
@@ -110,7 +122,7 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 |---|---|---|---|
 | `components` | No | `''` | 追加でインストールする rustup コンポーネント（カンマ区切り。例: `llvm-tools-preview`）。`rust-toolchain.toml` の `components` に列挙済みのものは指定不要 |
 | `allow-network-install` | No | `'false'` | rustup 未導入・破損時にネットワークから rustup-init を取得して導入することを許可する。既定は fail-closed。使い捨ての GitHub ホストランナーや、供給網リスクを許容できる環境でのみ `'true'` にする |
-| `sanitize-github-extraheader` | No | `'true'` | グローバル git config を `[include]` で取り込みつつ github.com 向け `http.extraheader`（スコープ付き・host 非限定の両方）を空値でリセットするジョブ専用オーバーレイを作成し、`GIT_CONFIG_GLOBAL` で以降のステップにのみ適用する（runner ホストの実 global config ファイル・extraheader の値そのものには一切触れない）。他ホスト向け認証ヘッダー・リポジトリローカル config には触れない。オーバーレイ作成・検証に失敗した場合、またはオーバーレイに対する検証で github.com 向け実効値が残っている場合はジョブを失敗させる（fail-closed）。互換問題時のみ `'false'` で無効化する |
+| `sanitize-github-extraheader` | No | `'true'` | グローバル git config を `[include]` で取り込みつつ github.com 向け `http.extraheader` key（base・パススコープ・host 非限定のすべて）を名前列挙で特定し、key ごとに導出したリセット先 key（host 非限定 key は base key へ。他ホストの実効値に影響しない）に空値を追記してリセットするジョブ専用オーバーレイを作成し、`GIT_CONFIG_GLOBAL` で以降のステップにのみ適用する（runner ホストの実 global config ファイル・extraheader の値そのものには一切触れない）。他ホスト向け認証ヘッダー・リポジトリローカル config には触れない。オーバーレイ作成・検証に失敗した場合、またはオーバーレイに対する検証で github.com 向け実効値が残っている場合はジョブを失敗させる（fail-closed）。互換問題時のみ `'false'` で無効化する |
 
 ## 参照バージョン（`@latest`）
 
@@ -141,7 +153,14 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
   ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
   利用が制限されている場合は許可が必要
 - **stale credential ガードの適用範囲**: オーバーレイでリセットする対象は
-  github.com 向けの `http.extraheader`（スコープ付き・host 非限定の両方）のみで、
+  github.com 向けの `http.extraheader`（base・パススコープ
+  `http.https://github.com/Org/.extraheader` 等を含むスコープ付き・host 非限定の
+  すべて。host 非限定 key は base key への空値追記で github.com 向けの実効値
+  だけを無効化し、他ホストが plain key に依存している場合の実効値は保持される）
+  のみで、名前列挙で特定できないワイルドカード host key
+  （`http.https://*.com/.extraheader` 等）が github.com へ実効している場合は
+  base probe のバックストップが fail-closed でジョブを失敗させる
+  （自動リセットは行わないため、runner ホスト側で当該 key を除去すること）。
   他ホスト向けの extraheader や `git config --global` に登録された credential
   helper（`gh auth setup-git` 等が設定するもの）はリセットしない。credential
   helper 由来の 401 が残る場合は、当該コマンドの実行時のみ
