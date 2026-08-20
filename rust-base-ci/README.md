@@ -194,3 +194,9 @@ gh api repos/actions/cache/git/tags/<tag-object-sha> --jq '.object.sha'
   （`Cargo.lock` の意図しない書き換え・runner 汚染を防ぐための意図的な挙動）
 - checkout は `persist-credentials: false`・`submodules: false`（既定）で行う。submodule に
   ある Rust クレートを検査対象にしたい場合、本 workflow では対応していない
+- **`deny` ジョブの advisory fetch は stale credential ガードで保護される**: `deny` ジョブは
+  内部で `Fandhe-AI/actions/rust-toolchain-setup@latest` を利用しており、その先頭ステップが
+  グローバル git config の `http.*.extraheader` を除去する（既定有効。詳細は
+  `rust-toolchain-setup/README.md` を参照）。これにより永続 self-hosted runner のホスト側に
+  残置した失効済み資格情報が、`cargo deny check advisories` が fetch する公開 repo
+  （`RustSec/advisory-db`）への匿名 fetch に混入して 401 になる事象を防ぐ

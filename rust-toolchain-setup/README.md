@@ -20,6 +20,13 @@ runner の rustup を検証し、リポジトリの `rust-toolchain.toml` にツ
   「ベース名 + ホスト三つ組」かつ preview は `-preview` なしで列挙される仕様を
   踏まえ、正規化した候補名との厳密一致で導入済みを判定してスキップする（冪等。
   ホスト三つ組を取得できない場合は判定を諦めて `rustup component add` に倒す）
+- **stale credential ガード（既定 fail-closed で有効）**: 先頭ステップで
+  グローバル git config の `http.*.extraheader` を除去してから後続処理へ進む。
+  永続 self-hosted runner のホスト側に失効済みトークンが残置していると、
+  公開 repo（例: `cargo audit` / `cargo deny` が fetch する `RustSec/advisory-db`）
+  への本来認証不要な匿名 fetch にまで混入し、断続的な HTTP 401（flaky な症状として
+  観測される）を引き起こす。本ステップはこれを CI 側で防ぐ多層防御の 1 層であり、
+  `sanitize-github-extraheader: 'false'` で無効化できる
 
 ## 前提条件
 
@@ -93,6 +100,7 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 |---|---|---|---|
 | `components` | No | `''` | 追加でインストールする rustup コンポーネント（カンマ区切り。例: `llvm-tools-preview`）。`rust-toolchain.toml` の `components` に列挙済みのものは指定不要 |
 | `allow-network-install` | No | `'false'` | rustup 未導入・破損時にネットワークから rustup-init を取得して導入することを許可する。既定は fail-closed。使い捨ての GitHub ホストランナーや、供給網リスクを許容できる環境でのみ `'true'` にする |
+| `sanitize-github-extraheader` | No | `'true'` | グローバル git config の `http.*.extraheader` を除去し、公開 repo への匿名 fetch へ stale credential が混入するのを防ぐ。リポジトリローカル config には触れない。互換問題時のみ `'false'` で無効化する |
 
 ## 参照バージョン（`@latest`）
 
@@ -122,3 +130,10 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 - **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
   ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
   利用が制限されている場合は許可が必要
+- **stale credential ガードの適用範囲**: 除去対象はグローバル git config の
+  `extraheader` のみで、`git config --global` に登録された credential helper
+  （`gh auth setup-git` 等が設定するもの）は除去しない。credential helper 由来の
+  401 が残る場合は、当該コマンドの実行時のみ `GIT_CONFIG_GLOBAL=/dev/null` を
+  環境変数として渡し、グローバル config そのものを無効化する回避策を検討すること。
+  runner ホスト側に残置した資格情報そのものの恒久的な除去は、本アクションではなく
+  runner ホスト側の運用（イメージ／セットアップの見直し）で対応する

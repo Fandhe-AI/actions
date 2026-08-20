@@ -25,10 +25,72 @@ inputs:
       供給網リスクを許容できる環境でのみ 'true' にする。
     required: false
     default: 'false'
+  sanitize-github-extraheader:
+    description: >-
+      グローバル git config の `http.*.extraheader` を除去し、公開 repo（例:
+      RustSec/advisory-db）への匿名 fetch へ、永続 self-hosted runner のホスト側に
+      残置した失効済み資格情報（stale credential）が混入して 401 になるのを防ぐ
+      （'true' で有効。既定 'true' = fail-closed でガードを効かせる）。
+
+      除去対象はグローバル git config のみで、`actions/checkout` が正当に書き込む
+      リポジトリローカルの認証設定には触れない。credential helper もグローバルから
+      除去しない（`gh auth setup-git` 等の正当な用途があるため）。credential helper
+      由来の 401 が残る場合は、呼び出し側の該当コマンドに
+      `GIT_CONFIG_GLOBAL=/dev/null` を環境変数として渡す回避策を検討すること。
+
+      根本原因（ホスト側の残置資格情報）の恒久対応は runner ホスト側で行う
+      （本 input は CI 側の多層防御の 1 層であり、根本対応の代替ではない）。
+      互換問題が起きた場合の escape hatch として 'false' で無効化できる。
+    required: false
+    default: 'true'
 
 runs:
   using: composite
   steps:
+    # self-hosted runner のホスト側グローバル git 設定（例: /root/.gitconfig）に
+    # 失効済みトークンの extraheader が残置されていると、後続の全 git fetch
+    # （cargo audit / cargo deny 等が行う公開 repo advisory-db の匿名 fetch を含む）
+    # に混入し、本来認証不要な公開 repo への fetch が 401 で失敗する
+    # （2026-08-19 観測。runner 再割当で pass する flaky な症状として現れた）。
+    # 恒久対応（ホスト側残置資格情報の除去）は runner ホスト側の別イシューのスコープ。
+    # 本ステップは CI 側の防御層として、rust 系ジョブの共通入口である本 action の
+    # 先頭で毎回グローバル config を除染する。リポジトリローカル config
+    # （actions/checkout が書き込む正当な認証設定）には触れない。
+    - name: Sanitize stale GitHub credentials in global git config
+      env:
+        SANITIZE: ${{ inputs.sanitize-github-extraheader }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ "${SANITIZE}" != "true" ]; then
+          exit 0
+        fi
+
+        # 値（トークンを含みうる）は一切出力せず、キー名のみを扱う。
+        # グローバル config 不在・extraheader 不在は正常系（冪等）として扱う。
+        # サブセクション（URL スコープ）は任意: `http.https://github.com/.extraheader` の
+        # ような URL スコープ付きだけでなく、`http.extraheader`（全 HTTPS host に無条件で
+        # 適用される、URL スコープ付きより悪質な形）も拾う必要があるため
+        # `^http\.(.*\.)?extraheader$` とする（`^http\..*\.extraheader$` だとサブセクションを
+        # 必須にしてしまい、この無条件形を検出できない）。
+        keys="$(git config --global --name-only --get-regexp '^http\.(.*\.)?extraheader$' 2>/dev/null || true)"
+
+        if [ -z "${keys}" ]; then
+          exit 0
+        fi
+
+        while IFS= read -r key; do
+          [ -z "${key}" ] && continue
+          if git config --global --unset-all -- "${key}" 2>/dev/null; then
+            # key はユーザー入力ではなく git config のキー名だが、
+            # workflow command 行へ値を混ぜないよう別 echo 行に分離する。
+            echo "::notice::stale な GitHub 資格情報をグローバル git config から除去しました（キー: ${key}）"
+          else
+            echo "::warning::グローバル git config のキー除去に失敗しました（キー: ${key}）。ガード自体はジョブを継続します"
+          fi
+        done <<< "${keys}"
+
     # 後続の「Sync toolchain」の前提（rustup show の実行可否）を満たしているか検証する。
     # 健全な導入済み環境では何もしない（冪等・追加コストほぼゼロ）。
     #
