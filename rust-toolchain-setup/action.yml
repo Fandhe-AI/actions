@@ -170,7 +170,13 @@ runs:
         # ガード対象が存在しないため何もしない）。未設定なら git 自身の解決規則
         # （$XDG_CONFIG_HOME/git/config → $HOME/.gitconfig の順に読み、両方
         # 存在すれば両方が実効になり $HOME/.gitconfig 側が後勝ちする）に合わせ、
-        # 存在するファイルを **両方とも** 対象にする。どちらか一方だけを見ると、
+        # 存在するファイルを **両方とも** 対象にする。この XDG → $HOME/.gitconfig
+        # という include 順は git-config(1) FILES 節の記載どおりで、
+        # `git config --list --show-origin`（両ファイルに同一 key を設定）の実測でも
+        # XDG → ~/.gitconfig の順に列挙され単一値の解決が ~/.gitconfig 側になる
+        # ことを確認済み。オーバーレイの include をこの順で並べることで、
+        # extraheader 以外の重複設定（user.name・url.insteadOf・credential.helper
+        # 等）の実効値も git 本来の優先順位のまま保たれる。どちらか一方だけを見ると、
         # 見なかった側に残る stale credential を見落として fail-open になる、
         # あるいは見なかった側の正当な設定を巻き添えで消してしまう。
         base_configs=()
