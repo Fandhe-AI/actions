@@ -25,11 +25,18 @@ runner の rustup を検証し、リポジトリの `rust-toolchain.toml` にツ
   `http.extraheader` key（base の `http.https://github.com/.extraheader`・
   パススコープの `http.https://github.com/Org/.extraheader` 等・host 非限定の
   `http.extraheader`）を名前列挙（`--list --name-only`。値は出力されない）で
-  特定し、key ごとに導出したリセット先 key へ空値を追記してリセットする**
-  （host 非限定 key のリセット先は base key。github.com 向け URL ではより
+  特定し、key ごとに導出したリセット先 key へ空値を追記してリセットする**。
+  名前列挙は include / includeIf の参照先ファイルを**条件の真偽に関わらず**
+  再帰的にたどる（無条件再帰列挙。深さ上限は git と同じ 10、循環 include も
+  安全に停止）ため、条件付き include（`includeIf "gitdir:..."` /
+  `"onbranch:..."` 等）内の github.com 向け extraheader も検出・リセットされる。
+  リセット行はオーバーレイの include 行より後に置かれるため、後続ステップの
+  別ディレクトリ・別ブランチで条件が真になって include が有効化されても、
+  同一 key への空値リセットが後勝ちして無効化される（条件が偽のままでも無害）。
+  host 非限定 key のリセット先は base key であり、github.com 向け URL ではより
   特異的な空の base key が plain key の寄与をクリアし、他ホスト向け URL では
-  plain key の値がそのまま実効に残るため、他ホストの実効値には影響しない。
-  実測済み）だけの**ジョブ専用オーバーレイ**を作成し、
+  plain key の値がそのまま実効に残るため、他ホストの実効値には影響しない
+  （実測済み）。この取り込み + リセットだけの**ジョブ専用オーバーレイ**を作成し、
   `GIT_CONFIG_GLOBAL` を `$GITHUB_ENV`
   経由で以降のステップにのみ適用する（**runner ホストの実 global config ファイルは
   書き換えない。extraheader の値そのものも本ステップのどの変数・コマンドライン
@@ -155,7 +162,9 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
 - **stale credential ガードの適用範囲**: オーバーレイでリセットする対象は
   github.com 向けの `http.extraheader`（base・パススコープ
   `http.https://github.com/Org/.extraheader` 等を含むスコープ付き・host 非限定の
-  すべて。host 非限定 key は base key への空値追記で github.com 向けの実効値
+  すべて。include / includeIf の参照先を条件の真偽に関わらず再帰的にたどる
+  ため、条件付き include 内の key も含む。host 非限定 key は base key への
+  空値追記で github.com 向けの実効値
   だけを無効化し、他ホストが plain key に依存している場合の実効値は保持される）
   のみで、名前列挙で特定できないワイルドカード host key
   （`http.https://*.com/.extraheader` 等）が github.com へ実効している場合は

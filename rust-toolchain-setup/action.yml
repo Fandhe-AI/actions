@@ -43,9 +43,16 @@ inputs:
       `http.https://github.com/Org/.extraheader` 等・host 非限定の
       `http.extraheader` も個別に検出・リセットされる。host 非限定 key の
       リセット先は base key であり、他ホストの実効値には影響しない）だけの
-      ジョブ専用の小さな「オーバーレイ」ファイルを `${RUNNER_TEMP}` 配下
-      （パーミッション 600）に作成し、`GIT_CONFIG_GLOBAL` を `$GITHUB_ENV` 経由で
-      当該オーバーレイに向けることで、本ジョブの以降のステップにのみ適用する。
+      構成とする。名前列挙は include / includeIf の参照先ファイルを**条件の
+      真偽に関わらず**再帰的にたどる（無条件再帰列挙）ため、条件付き include
+      （`includeIf "gitdir:..."` / `"onbranch:..."` 等）内の github.com 向け
+      extraheader も検出・リセットされる。リセット行はオーバーレイの include 行
+      より後に置かれるため、後続ステップの別ディレクトリ・別ブランチで条件が
+      真になって include が有効化されても、同一 key への空値リセットが後勝ち
+      して無効化される（条件が偽のままでも無害）。この「オーバーレイ」ファイルは
+      ジョブ専用に `${RUNNER_TEMP}` 配下（パーミッション 600）に作成し、
+      `GIT_CONFIG_GLOBAL` を `$GITHUB_ENV` 経由で当該オーバーレイに向けることで、
+      本ジョブの以降のステップにのみ適用する。
       git の `http.extraHeader` は空値を与えるとそれより前に（include 経由も含め）
       当該 URL の実効値として累積された値をすべてリセットする仕様であるため、
       github.com スコープ付き key は同名 key への空値追記で、host 非限定
@@ -102,7 +109,9 @@ runs:
     #
     # 本ステップは runner ホストの実 global config ファイルを直接書き換えない。
     # 元の global config を [include] で取り込み、github.com 向け extraheader の key
-    # （base・パススコープ・host 非限定）を名前列挙で特定し、key ごとに導出した
+    # （base・パススコープ・host 非限定。include / includeIf の参照先を条件の
+    # 真偽に関わらず再帰的にたどって列挙するため、条件付き include 内の key も
+    # 含む）を名前列挙で特定し、key ごとに導出した
     # リセット先 key（host 非限定 key は base key へ。他ホストの実効値に影響しない）
     # に空値を追記してリセットする小さな「オーバーレイ」をジョブ専用に作成し、
     # GIT_CONFIG_GLOBAL で以降のステップにのみ適用する。名前列挙で特定できない
@@ -235,30 +244,43 @@ runs:
         # （`http.https://github.com/Org/.extraheader` 等）を見落として fail-open
         # になるため、実効になりうる key を名前で列挙し、github.com 向けの
         # `http.<url>.extraheader`（userinfo・port・パススコープ含む）と
-        # host 非限定の `http.extraheader` をすべて対象に収集する。
-        # `--file` + `--includes` で見るため、リポジトリローカル・system config は
+        # host 非限定の `http.extraheader` をすべて対象に収集する。base config
+        # のファイル群から直接列挙するため、リポジトリローカル・system config は
         # 混ぜない（actions/checkout 済みの場合にリポジトリローカルの正当な
         # extraheader を stale credential と誤認して fail-closed させないため）。
-        # 列挙の失敗（rc 非 0）は config 破損等の実エラーであり、`|| true` で
-        # 握り潰すと「対象なし」と誤判定して fail-open になるため、rc を明示的に
-        # 判定してエラー終了する（fail-closed）。
-        names_file="${tmp_dir}/names"
-        set +e
-        git config --file "${overlay}" --includes --list --name-only -z > "${names_file}" 2>/dev/null
-        list_rc=$?
-        set -e
-
-        if [ "${list_rc}" -ne 0 ]; then
-          echo "::error::グローバル git config の読み取りに失敗しました。config が破損している可能性があります"
-          exit 1
-        fi
-
+        #
+        # 列挙は `--includes` に頼らず、base config から include / includeIf の
+        # 参照先ファイルを**条件の真偽に関わらず**再帰的にたどって行う（無条件
+        # 再帰列挙）。`--includes` は本ステップ実行時点のコンテキスト（カレント
+        # ディレクトリ・ブランチ）でしか `includeIf "gitdir:..."` /
+        # `includeIf "onbranch:..."` を展開しないが、オーバーレイは $GITHUB_ENV
+        # 経由で後続ステップの別ディレクトリ（例: cargo が ~/.cargo 配下で行う
+        # advisory-db の git 操作）でも読まれ、その時点で別の条件付き include が
+        # 有効化され得る。そこに github.com 向け extraheader があると、現行
+        # コンテキストの `--includes` 列挙では targets に入らず fail-open になる。
+        # 無条件再帰列挙は無条件 include も含めてすべての参照先をたどるため
+        # `--includes` 列挙の上位互換であり、列挙経路はこちらへ一本化する。
+        #
+        # 条件付き include 内の該当 key をリセット対象に含めてよい根拠:
+        # リセット（空値追記）はオーバーレイの include 行より**後**に置かれる
+        # ため、後続ステップでどの条件付き include が有効化されても、include
+        # 由来の値は常にリセットより「前」に累積され、同一 key への空値リセットが
+        # 後勝ちして無効化される。条件が偽のままの場合も、リセット行は実効値に
+        # 寄与していない key を空にするだけで無害（実測検証済み）。
+        #
+        # 列挙の失敗（存在するファイルで rc 非 0）は config 破損等の実エラーで
+        # あり、`|| true` で握り潰すと「対象なし」と誤判定して fail-open になる
+        # ため、rc を明示的に判定してエラー終了する（fail-closed）。存在しない・
+        # 読めない参照先は git 自身の include 解決（silently ignore）に合わせて
+        # skip する（そのファイルは現時点で値を寄与できない。ジョブ実行中に
+        # 後から出現するファイルまでは対象にしない）。
+        #
         # section・key 部は git が小文字化して出力するが、subsection（URL 部）は
         # 大文字小文字が保持されるため、判定は小文字化した名前で行い、以降の
         # git 操作には元の key 名をそのまま使う（bash 3.2 互換のため `${var,,}` は
         # 使わず tr で小文字化する。同様に連想配列・readarray も使わない）。
-        # key 名は秘密ではないため argv に渡してよいが、echo・workflow command 行
-        # へは一切展開しない。
+        # key 名・参照先パスは秘密ではないため argv に渡してよいが、echo・
+        # workflow command 行へは一切展開しない。
         #
         # regex の設計: scheme（https?://）は必須とする。schemeless な key
         # （`http.github.com.extraheader` 等）は urlmatch で実効にならないため
@@ -270,24 +292,121 @@ runs:
         # なお、ワイルドカード host（`http.https://*.com/.extraheader` 等）は
         # github.com へ実効しうるが名前列挙ではマッチしない。これは後段の
         # base probe バックストップで fail-closed に検知する。
+        names_file="${tmp_dir}/names"
+        inc_file="${tmp_dir}/incpaths"
         targets=()
-        while IFS= read -r -d '' name; do
-          lower="$(printf '%s' "${name}" | tr 'A-Z' 'a-z')"
-          if [ "${lower}" = "http.extraheader" ] \
-            || printf '%s\n' "${lower}" | grep -Eq '^http\.(https?://)([^/@]*@)?github\.com(:[0-9]+)?(/.*)?\.extraheader$'; then
-            dup=false
-            for t in ${targets[@]+"${targets[@]}"}; do
-              if [ "${t}" = "${name}" ]; then
-                dup=true
-                break
-              fi
-            done
-            if [ "${dup}" = false ]; then
-              targets+=("${name}")
+        visited=()
+        q_paths=()
+        q_depths=()
+        for cfg in "${base_configs[@]}"; do
+          q_paths+=("${cfg}")
+          q_depths+=(0)
+        done
+
+        qi=0
+        while [ "${qi}" -lt "${#q_paths[@]}" ]; do
+          f="${q_paths[${qi}]}"
+          depth="${q_depths[${qi}]}"
+          qi=$((qi + 1))
+
+          # 訪問済みパス（同一文字列）は skip する（include 循環対策）。文字列
+          # 表記が異なる同一ファイル（`..` 経由等）は検出できないが、その場合も
+          # 深さ上限で必ず停止する。
+          seen=false
+          for v in ${visited[@]+"${visited[@]}"}; do
+            if [ "${v}" = "${f}" ]; then
+              seen=true
+              break
             fi
+          done
+          if [ "${seen}" = true ]; then
+            continue
           fi
-        done < "${names_file}"
-        rm -f "${names_file}"
+          visited+=("${f}")
+
+          if [ ! -f "${f}" ] || [ ! -r "${f}" ]; then
+            # 存在しない・読めない参照先: git と同様に skip（上記コメント参照）
+            continue
+          fi
+
+          set +e
+          git config --file "${f}" --list --name-only -z > "${names_file}" 2>/dev/null
+          list_rc=$?
+          set -e
+
+          if [ "${list_rc}" -ne 0 ]; then
+            echo "::error::グローバル git config の読み取りに失敗しました。config が破損している可能性があります"
+            exit 1
+          fi
+
+          inc_names=()
+          while IFS= read -r -d '' name; do
+            lower="$(printf '%s' "${name}" | tr 'A-Z' 'a-z')"
+            if [ "${lower}" = "http.extraheader" ] \
+              || printf '%s\n' "${lower}" | grep -Eq '^http\.(https?://)([^/@]*@)?github\.com(:[0-9]+)?(/.*)?\.extraheader$'; then
+              dup=false
+              for t in ${targets[@]+"${targets[@]}"}; do
+                if [ "${t}" = "${name}" ]; then
+                  dup=true
+                  break
+                fi
+              done
+              if [ "${dup}" = false ]; then
+                targets+=("${name}")
+              fi
+            fi
+            if [ "${lower}" = "include.path" ] \
+              || printf '%s\n' "${lower}" | grep -Eq '^includeif\..*\.path$'; then
+              dup=false
+              for t in ${inc_names[@]+"${inc_names[@]}"}; do
+                if [ "${t}" = "${name}" ]; then
+                  dup=true
+                  break
+                fi
+              done
+              if [ "${dup}" = false ]; then
+                inc_names+=("${name}")
+              fi
+            fi
+          done < "${names_file}"
+
+          # 深さ上限は git 自身の include 深さ上限と同じ 10（循環・過深の保険）
+          if [ "${depth}" -ge 10 ]; then
+            continue
+          fi
+
+          for iname in ${inc_names[@]+"${inc_names[@]}"}; do
+            set +e
+            git config --file "${f}" --get-all -z -- "${iname}" > "${inc_file}" 2>/dev/null
+            get_rc=$?
+            set -e
+
+            # rc=1 は「値なし」（正常系）。それ以外の非 0 は fail-closed
+            if [ "${get_rc}" -ne 0 ] && [ "${get_rc}" -ne 1 ]; then
+              echo "::error::グローバル git config の読み取りに失敗しました。config が破損している可能性があります"
+              exit 1
+            fi
+
+            while IFS= read -r -d '' ipath; do
+              if [ -z "${ipath}" ]; then
+                continue
+              fi
+              # `~/` は $HOME へ展開する（`~user/` 形式は展開せず、実在しない
+              # リテラルパスとして skip に倒れる）。相対パスは git の解決規則
+              # どおり参照元ファイルのディレクトリ基準で絶対化する。
+              case "${ipath}" in
+                "~/"*) ipath="${HOME}/${ipath#\~/}" ;;
+              esac
+              case "${ipath}" in
+                /*) ;;
+                *) ipath="$(dirname "${f}")/${ipath}" ;;
+              esac
+              q_paths+=("${ipath}")
+              q_depths+=($((depth + 1)))
+            done < "${inc_file}"
+          done
+        done
+        rm -f "${names_file}" "${inc_file}"
 
         if [ "${#targets[@]}" -gt 0 ]; then
           # 検出した各対象 key から「リセット先 key」を導出し、オーバーレイに
@@ -342,6 +461,13 @@ runs:
         # スコープ付き key は key 名から先頭 `http.`・末尾 `.extraheader` を除いた
         # URL を probe とする。残っていればガード失敗とする（黙って 401 を再発
         # させない）。
+        #
+        # 注意: probe は「現行コンテキスト」での実効値を確認するものであり、
+        # 条件付き include（includeIf）内の key は条件が偽である現行コンテキスト
+        # では常にクリーンに見える。当該 key の無効化の保証は probe ではなく、
+        # オーバーレイ末尾に置いた同一 key への空値リセットが（条件が後続
+        # ステップで真になっても include 由来の値より後に評価され）後勝ちする
+        # 仕様による。
         #
         # exit code: 0 = マッチあり, 1 = マッチ無し（正常系）, それ以外 = config
         # 破損等の実エラー。空値（値なし）でも `--get-urlmatch` は rc=0 かつ
