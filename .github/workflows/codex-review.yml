@@ -97,8 +97,11 @@ on:
       skip-branch-prefixes:
         description: >-
           codex レビューを skip する head branch 名の接頭辞（カンマ区切り。
-          例 "chore/skills-update,chore/submodule-update"）。update-external.yml が
+          例 "chore/skills-update-,chore/submodule-update-"）。update-external.yml が
           生成する日次同期 PR のような自動生成 PR をレビュー対象から外す用途。
+          判定は単純な前方一致のため、接頭辞は自動生成 PR だけが使う十分に限定的な
+          値にすること（区切り文字まで含める。例: 末尾の "-" を含めれば
+          chore/skills-update2-experiment のような無関係ブランチに偶発一致しない）。
           同期 PR の差分は上流の取り込みそのもので、指摘があっても修正先は
           取り込み元の上流リポジトリにしかなく、レビューを回してもマージが滞るだけになる。
           判定はブランチ名の接頭辞のみで行うため、リポジトリへ push できる主体は
@@ -112,7 +115,7 @@ on:
       skip-sync-pr-review:
         description: >-
           【deprecated】skip-branch-prefixes への移行期間中だけ残している旧 input。
-          true は skip-branch-prefixes: "chore/skills-update,chore/submodule-update"
+          true は skip-branch-prefixes: "chore/skills-update-,chore/submodule-update-"
           の指定と同義に扱う（skip-branch-prefixes が非空ならそちらを優先）。
           かつての「変更ファイル集合の実測」は行わず接頭辞判定のみになる点に注意。
           呼び出し側の移行が済み次第、次の破壊的変更で削除する
@@ -159,9 +162,12 @@ jobs:
           set -euo pipefail
 
           # 【deprecated】旧 input の互換: skip-branch-prefixes 未指定で
-          # skip-sync-pr-review: true の場合は従来の同期 PR 接頭辞を適用する
+          # skip-sync-pr-review: true の場合は従来の同期 PR 接頭辞を適用する。
+          # 生成ブランチは skills-update / submodule-update action の
+          # "${BRANCH_PREFIX}-${DATE}" 形式のため、末尾の "-" まで含めて
+          # 無関係ブランチ（例: chore/skills-update2-experiment）への偶発一致を防ぐ
           if [ -z "${SKIP_PREFIXES}" ] && [ "${LEGACY_SKIP_SYNC}" = "true" ]; then
-            SKIP_PREFIXES='chore/skills-update,chore/submodule-update'
+            SKIP_PREFIXES='chore/skills-update-,chore/submodule-update-'
           fi
 
           # 判定結果の唯一の出口。呼ばずにスクリプトが死んだ場合は output 自体が

@@ -39,7 +39,8 @@ jobs:
       # 全 PR をレビュー。同期 PR は上流の取り込みそのもので、指摘の修正先が上流
       # リポジトリにしかないため）。判定はブランチ名の接頭辞のみで行うため、push
       # できる主体は該当接頭辞のブランチで gate を回避できる（受容済み残留リスク。
-      # 第三者の write コラボレーターがいる場合は指定しないこと）。codex ジョブは
-      # job 単位で skip され、check-run は skipped 結論で生成されるので required
-      # status check は満たされる:
-      # skip-branch-prefixes: chore/skills-update,chore/submodule-update
+      # 第三者の write コラボレーターがいる場合は指定しないこと）。接頭辞は
+      # 自動生成 PR 専用の十分に限定的な値にする（区切り文字の "-" まで含める）。
+      # codex ジョブは job 単位で skip され、check-run は skipped 結論で生成されるので
+      # required status check は満たされる:
+      # skip-branch-prefixes: chore/skills-update-,chore/submodule-update-
