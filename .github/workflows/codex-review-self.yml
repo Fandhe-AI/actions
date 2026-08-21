@@ -38,11 +38,10 @@ jobs:
     with:
       # update-external.yml が生成する日次同期 PR は上流の取り込みそのもので、
       # codex の指摘があってもこの PR では直せない（修正先は取り込み元の上流リポジトリ）。
-      # TODO(移行): skip-branch-prefixes 対応が @latest に載ったら
-      # skip-branch-prefixes: chore/skills-update-,chore/submodule-update- へ置き換えて
-      # 旧 input を workflow から削除する（本 PR 自身の codex 実行は @latest = 旧 main の
-      # workflow を使うため、同一 PR で呼び出し側を先に移行すると startup_failure になる）。
-      skip-sync-pr-review: true
+      # 判定はブランチ名の接頭辞のみで行うため、push できる主体は該当接頭辞の
+      # ブランチで gate を回避できる（受容済み残留リスク。詳細は codex-review/README.md）。
+      # 接頭辞は自動生成 PR 専用の十分に限定的な値にする（区切り文字の "-" まで含める）。
+      skip-branch-prefixes: chore/skills-update-,chore/submodule-update-
       # post-feedback-runner-label の既定値は self-hosted であり、public リポジトリでは
       # 組織 runner 方針（public は GitHub ホステッド）に反する。資格情報に触れない
       # コメント投稿ジョブなので、必ず ubuntu-latest を明示的に渡すこと。
