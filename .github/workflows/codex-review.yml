@@ -112,24 +112,14 @@ on:
         type: string
         required: false
         default: ""
-      skip-sync-pr-review:
-        description: >-
-          【deprecated】skip-branch-prefixes への移行期間中だけ残している旧 input。
-          true は skip-branch-prefixes: "chore/skills-update-,chore/submodule-update-"
-          の指定と同義に扱う（skip-branch-prefixes が非空ならそちらを優先）。
-          かつての「変更ファイル集合の実測」は行わず接頭辞判定のみになる点に注意。
-          呼び出し側の移行が済み次第、次の破壊的変更で削除する
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
 
 jobs:
   # head branch 名の接頭辞で「レビューを skip する自動生成 PR」かどうかを判定する
-  # ゲート。skip-branch-prefixes が空でない（または deprecated な skip-sync-pr-review が
-  # true の）呼び出し側でのみ起動し、それ以外では skip されて outputs が空になる
+  # ゲート。skip-branch-prefixes が空でない呼び出し側でのみ起動し、
+  # それ以外では skip されて outputs が空になる
   # （codex 側は空を「skip しない」と解釈する fail-closed）。
   #
   # 判定はブランチ名の接頭辞のみで行う。ブランチ名は同一リポジトリへ push できる
@@ -144,7 +134,7 @@ jobs:
     runs-on: ${{ inputs.post-feedback-runner-label }}
     timeout-minutes: 5
     if: >-
-      (inputs.skip-branch-prefixes != '' || inputs.skip-sync-pr-review) &&
+      inputs.skip-branch-prefixes != '' &&
       github.event.pull_request.head.repo.full_name == github.repository
     # ブランチ名の比較だけで API を呼ばないため、権限は一切要らない
     permissions: {}
@@ -155,20 +145,10 @@ jobs:
         id: decide
         env:
           SKIP_PREFIXES: ${{ inputs.skip-branch-prefixes }}
-          LEGACY_SKIP_SYNC: ${{ inputs.skip-sync-pr-review }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         shell: bash
         run: |
           set -euo pipefail
-
-          # 【deprecated】旧 input の互換: skip-branch-prefixes 未指定で
-          # skip-sync-pr-review: true の場合は従来の同期 PR 接頭辞を適用する。
-          # 生成ブランチは skills-update / submodule-update action の
-          # "${BRANCH_PREFIX}-${DATE}" 形式のため、末尾の "-" まで含めて
-          # 無関係ブランチ（例: chore/skills-update2-experiment）への偶発一致を防ぐ
-          if [ -z "${SKIP_PREFIXES}" ] && [ "${LEGACY_SKIP_SYNC}" = "true" ]; then
-            SKIP_PREFIXES='chore/skills-update-,chore/submodule-update-'
-          fi
 
           # 判定結果の唯一の出口。呼ばずにスクリプトが死んだ場合は output 自体が
           # 空になり、codex 側の `!= 'true'` がレビュー実行側へ倒れる（fail-closed）
@@ -209,8 +189,7 @@ jobs:
     #     （vars は呼び出し側リポジトリ／org の Actions variables を参照する）
     # (2) fork PR では untrusted コードを self-hosted runner で実行しない（fail-closed）
     # (3) skip-gate が「skip 対象の接頭辞に一致した」と判定した場合のみレビューを外す
-    #     （skip-branch-prefixes または deprecated な skip-sync-pr-review 指定の呼び出し側で
-    #     のみ起動する。判定根拠は同ジョブの注記）。
+    #     （skip-branch-prefixes 指定の呼び出し側でのみ起動する。判定根拠は同ジョブの注記）。
     #     skip は job 単位に留める。check-run 自体は "skipped" 結論で生成されるため
     #     required status check を満たせる。workflow / paths フィルタで workflow ごと
     #     起動しない形にすると check-run が作られず Expected のまま埋まらないため不可。
