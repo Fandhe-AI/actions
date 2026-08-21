@@ -484,8 +484,8 @@ jobs:
         with:
           token: ${{ secrets.SUBMODULE_PAT }}
           base-branch: ${{ inputs.base-branch }}
-          # この接頭辞は codex-review.yml の sync-gate ジョブ（skip-sync-pr-review 有効時）が
-          # shell の case で参照している。変更するときは同ファイルのリテラルも直すこと
+          # この接頭辞は codex-review.yml の skip 判定（skip-branch-prefixes /
+          # 旧 skip-sync-pr-review の既定接頭辞）と対になっている。変更時は両方直すこと
           branch-prefix: chore/submodule-update
           commit-message: 'chore: submodule を最新に更新'
           pr-title: 'chore: submodule を最新に更新'
@@ -733,8 +733,8 @@ jobs:
           # ここを専用の read-only PAT に差し替えること。
           source-token: ${{ github.token }}
           base-branch: ${{ inputs.base-branch }}
-          # この接頭辞は codex-review.yml の sync-gate ジョブ（skip-sync-pr-review 有効時）が
-          # shell の case で参照している。変更するときは同ファイルのリテラルも直すこと
+          # この接頭辞は codex-review.yml の skip 判定（skip-branch-prefixes /
+          # 旧 skip-sync-pr-review の既定接頭辞）と対になっている。変更時は両方直すこと
           branch-prefix: chore/skills-update
           commit-message: 'chore: エージェントスキルを最新に更新'
           pr-title: 'chore: エージェントスキルを最新に更新'
