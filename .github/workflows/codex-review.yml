@@ -65,10 +65,26 @@ on:
         required: false
         default: self-hosted
       codex-version:
-        description: "@openai/codex の固定バージョン（サプライチェーン対策のため latest 不可）"
+        description: >-
+          @openai/codex の固定バージョン（サプライチェーン対策のため latest 不可）。
+          `model` 既定の GPT-6 Astra（`gpt-6-astra`）は 0.153.1 以降でのみ利用可
         type: string
         required: false
-        default: "0.146.1"
+        default: "0.153.4"
+      model:
+        description: >-
+          codex exec に渡すモデル slug（`--config model=` で明示固定。CLI 既定モデルの
+          変更に引きずられないため）。空文字は不可
+        type: string
+        required: false
+        default: gpt-6-astra
+      reasoning-effort:
+        description: >-
+          model_reasoning_effort（low / medium / high / xhigh / max / ultra）。
+          空ならモデルのサーバー既定（gpt-6-astra は medium）に従う
+        type: string
+        required: false
+        default: ""
       timeout-minutes:
         description: codex ジョブの timeout（分）
         type: number
@@ -527,7 +543,27 @@ jobs:
         env:
           CODEX_HOME: ${{ vars.CODEX_HOME_DIR }}
           THREAD_COUNT: ${{ steps.threads.outputs.count }}
+          CODEX_MODEL: ${{ inputs.model }}
+          CODEX_REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         run: |
+          # モデルは input で明示固定する（CLI のバンドル既定モデルはバージョンごとに
+          # 変わる。0.153.4 で GPT-6 Astra が既定化されたが、既定に依存すると
+          # codex-version の更新だけでレビュー品質・所要時間・quota 消費が黙って変わる）。
+          # slug は TOML 文字列として渡すため、英数字と . _ - 以外を含む値（引用符・
+          # 改行・空）は fail-closed で拒否する
+          case "${CODEX_MODEL}" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "::error::model input が空か不正な文字を含みます: '${CODEX_MODEL}'"
+              exit 1 ;;
+          esac
+          effort_args=()
+          if [ -n "${CODEX_REASONING_EFFORT}" ]; then
+            case "${CODEX_REASONING_EFFORT}" in
+              low|medium|high|xhigh|max|ultra) ;;
+              *) echo "::error::reasoning-effort input が不正です: '${CODEX_REASONING_EFFORT}'"; exit 1 ;;
+            esac
+            effort_args=(--config "model_reasoning_effort=\"${CODEX_REASONING_EFFORT}\"")
+          fi
           # prompt 本体（base 版 / 同梱既定版）に、未解決スレッド再判定の指示とデータを
           # 付加した入力を組み立てる。指示文（heredoc）は本 workflow が持つ信頼済み
           # テキスト、スレッド一覧 JSON は untrusted データ（PR 参加者が本文を書ける）
@@ -570,6 +606,8 @@ jobs:
             codex exec \
               --sandbox read-only \
               --config project_doc_max_bytes=0 \
+              --config "model=\"${CODEX_MODEL}\"" \
+              "${effort_args[@]}" \
               --output-schema "$RUNNER_TEMP/review-schema.json" \
               --output-last-message "$RUNNER_TEMP/codex-review.json" \
               - < "$prompt_input" \
