@@ -155,7 +155,9 @@ PR 自身がレビュー基準を書き換えても当の PR のレビューに�
 |---|---|---|---|
 | `runner-label` | - | `codex` | codex ジョブを実行する runner ラベル。`CODEX_HOME` マウント済み専用プールを用途ラベルで指す |
 | `post-feedback-runner-label` | - | `self-hosted` | PR コメント投稿ジョブ（資格情報に触れない）の runner ラベル |
-| `codex-version` | - | `0.146.1` | `@openai/codex` の固定バージョン（latest 不可） |
+| `codex-version` | - | `0.153.4` | `@openai/codex` の固定バージョン（latest 不可）。`model` 既定の `gpt-6-astra` は 0.153.1 以降でのみ利用可 |
+| `model` | - | `gpt-6-astra` | `codex exec --config model=` で明示固定するモデル slug（GPT-6 Astra）。CLI のバンドル既定モデルはバージョンごとに変わるため既定に依存しない。旧モデルへ戻すには `gpt-5.6-sol` 等を指定 |
+| `reasoning-effort` | - | （空） | `model_reasoning_effort`（`low` / `medium` / `high` / `xhigh` / `max` / `ultra`）。空ならモデルのサーバー既定（`gpt-6-astra` は `medium`。旧既定の `gpt-5.6-sol` は `low` だったため所要時間と quota 消費は増える方向） |
 | `timeout-minutes` | - | `30` | codex ジョブの timeout（分） |
 | `prompt-path` | - | `.github/codex/prompts/review.md` | 呼び出し側リポジトリの prompt パス（base に無ければ同梱既定版） |
 | `schema-path` | - | `.github/codex/review-schema.json` | 呼び出し側リポジトリの schema パス（base に無ければ同梱既定版） |
