@@ -81,10 +81,11 @@ on:
       reasoning-effort:
         description: >-
           model_reasoning_effort（low / medium / high / xhigh / max / ultra）。
-          空ならモデルのサーバー既定（gpt-6-astra は medium）に従う
+          既定 low（gpt-6-astra のサーバー既定 medium だと ChatGPT Pro の共有 quota が
+          上限に達したため）。空ならモデルのサーバー既定に従う
         type: string
         required: false
-        default: ""
+        default: low
       timeout-minutes:
         description: codex ジョブの timeout（分）
         type: number
