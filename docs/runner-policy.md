@@ -105,6 +105,32 @@ public リポジトリから呼び出す場合は方針に合わせてラベル�
 Composite Action であり、private リポジトリ側での利用を想定している
 （`rust-toolchain-setup/README.md` 参照）。
 
+## 5. self-hosted runner での rust-cache 利用
+
+**適用範囲**: `CARGO_HOME` をジョブ間・リポジトリ間で永続共有している self-hosted runner が
+対象。GitHub ホステッド runner は毎回使い捨て環境のため対象外。
+
+**ルール**: self-hosted runner 上のジョブで [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)
+を使う場合は、**`with: cache-bin: false` を必須**とする。
+
+**根拠**: 既定の `cache-bin: true` は post ステップで `${CARGO_HOME}/bin` 配下の
+「cargo install 由来でない通常ファイル」を削除するため、runner イメージに焼き込んだ
+rustup 本体等が失われうる。`CARGO_HOME` を使い捨てない self-hosted 環境ではこの副作用が
+別ジョブ・別リポジトリの CI に波及するため、明示的に無効化する。
+
+### 記述例
+
+```yaml
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          cache-bin: false
+```
+
 ## 関連
 
 - [`codex-review-runner-exception.md`](codex-review-runner-exception.md)
