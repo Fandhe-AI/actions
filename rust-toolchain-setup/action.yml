@@ -604,6 +604,10 @@ runs:
           echo '::error::curl https://sh.rustup.rs | sh を伴い、pin できないリモートコードを'
           echo '::error::ジョブ権限で実行することになるため、既定では行いません。'
           echo "::error::恒久対応: runner イメージへ rustup を焼き込んでください。"
+          echo '::error::焼き込み済みでも、同一 runner 上の先行ジョブが CARGO_HOME/bin を掃除した'
+          echo '::error::可能性があります（例: Swatinem/rust-cache の cache-bin: true 既定は'
+          echo '::error::post ステップで CARGO_HOME/bin を削除します）。該当する場合は消費側'
+          echo '::error::ジョブの rust-cache 設定に cache-bin: false を指定してください。'
           echo "::error::どうしても runner 上で導入する場合は allow-network-install: 'true' を明示してください。"
           echo "診断情報:"
           echo "  RUSTUP_HOME=${RUSTUP_HOME:-<未設定>}"
