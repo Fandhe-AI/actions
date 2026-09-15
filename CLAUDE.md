@@ -112,7 +112,7 @@ main コンテキストの消費を抑えるため、調査・実装・レビュ
 
 | ファイル | 内容 |
 |---|---|
-| `runner-policy.md` | 組織 runner 方針（public は GitHub ホステッド / private は self-hosted、対象リポジトリ一覧、codex-review 例外） |
+| `runner-policy.md` | 組織 runner 方針（public は GitHub ホステッド / private は self-hosted、対象リポジトリ一覧、codex-review 例外、rust-cache 利用時の注意） |
 | `codex-review-runner-exception.md` | codex-review runner 例外の適用ガイド（適用条件の担保責任、public 向け wrapper、例外が及ばない範囲、消費側規約からの参照方法） |
 
 ## Rules
