@@ -156,6 +156,12 @@ fandhe-backend の各ジョブにある以下の 2〜3 ステップ:
   載るのが実在しないディレクトリになり、後続ステップが
   `cargo: command not found`（exit 127）で落ちる。本アクションは
   `${CARGO_HOME:-$HOME/.cargo}/bin` を追記してこれを回避する
+- **rustup 未検出時の原因は焼き込み漏れとは限らない**: runner イメージへ
+  rustup を焼き込み済みでも、同一 runner 上の先行ジョブが `CARGO_HOME/bin`
+  ごと削除している場合がある（例: `Swatinem/rust-cache` の `cache-bin: true`
+  既定は post ステップで `CARGO_HOME/bin` を削除する）。この場合は焼き込みを
+  やり直しても再発するため、消費側ジョブの `rust-cache` 設定に
+  `cache-bin: false` を指定すること
 - **`actions` リポジトリのアクセス**: `actions` は public のため共有設定（提供側）は不要。
   ただし利用側の org / リポジトリの Settings → Actions → General で外部 Action の
   利用が制限されている場合は許可が必要
