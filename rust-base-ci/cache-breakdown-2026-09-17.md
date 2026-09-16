@@ -5,7 +5,7 @@
 計測専用の事前調査であり、本ドキュメントの追加以外にコード変更は行っていない
 （`rust-base-ci.yml` 等は未変更）。削減の実装は #132 / #133 のスコープ。
 
-### 計測環境
+## 計測環境
 
 - ホスト: macOS (arm64) / Docker Desktop
 - コンテナ: `rust:1-slim-bookworm`（公式イメージ）、`--platform linux/arm64`（**ネイティブ arm64**。x86_64 の `ubuntu-latest` runner とはアーキテクチャが異なる点に注意）
@@ -15,7 +15,7 @@
 - 実行コマンド: `cargo test --workspace --all-features --no-run`（テストコード自体の実行はせず、`target/` のビルド成果物構成のみを対象化。実行範囲を最小化する目的）
 - 既知の差分: amd64 emulation はビルド時間が非現実的に長くなる見込みのため、計画に明記の代替手順に従い arm64 ネイティブで実行した代替値として扱う。CI 実測の「復元・保存時間」は §4 の実ログ値を優先する
 
-### 1. ディレクトリ別 `du -sh`（コンテナ内、cold build 直後）
+## 1. ディレクトリ別 `du -sh`（コンテナ内、cold build 直後）
 
 `actions/cache` の `path:`（`rust-base-ci.yml` test ジョブ）に対応する 4 パス:
 
@@ -40,13 +40,13 @@
 
 `$CARGO_HOME` 配下は `/usr/local/cargo`（`rust` 公式イメージの既定値。runner の `~/.cargo` とはパスが異なるのみで対象範囲は同一）。
 
-### 2. `target/debug/incremental` 除外の削減見込み
+## 2. `target/debug/incremental` 除外の削減見込み
 
 - 生 du 値: 2.6G（`target` 全体の約9.6%）
 - blob 換算（観測圧縮率を適用）: CI 実測の圧縮後 blob サイズ `3318233612 B`（≈3165 MiB / ≈3.09 GiB）に対する生 `target` サイズ（27G）の比から、観測圧縮率 ≈ **11.4%**（`3.09 GiB ÷ 27 GiB`）と算出。これを incremental の生サイズ（2.6G）へ適用すると、削減見込みは **約 305 MiB**（blob 換算。`(2.6 / 27) × 3165 MiB` と `2.6 GiB × 11.4%` は同一の計算を別経路で表しただけであり、いずれも同じ約305 MiBに一致する）。
 - 圧縮前後の取り違えを避けるため、生 du 値（2.6G）と blob 換算値（約305 MiB）を両方明記する。両者は同じ「incremental を除外した場合の削減量」を指すが、単位（未圧縮 target サイズ vs actions/cache が転送・保存する圧縮済み blob サイズ）が異なる点に注意。arm64 ネイティブ計測から算出した圧縮率を x86_64 の CI blob に適用する推定であり、アーキテクチャ横断の推定値である点にも留意（x86_64 実機での生 `target` サイズは未計測）。
 
-### 3. workspace メンバー成果物の内訳（prune 対象の見積り）
+## 3. workspace メンバー成果物の内訳（prune 対象の見積り）
 
 `Cargo.toml` の `[workspace] members`（11 クレート、path 名基準）:
 
@@ -58,9 +58,9 @@
 
 概算としては、442 ターゲットのうち大半が `test`/`bench`（統合テストバイナリ）であり、`deps/` 22G の主要な削減余地は member 自身の lib rlib（再利用可能）ではなく、これら大型の統合テスト・ベンチ実行バイナリ（prune 対象）にあると推測される（生 du 値ベースの参考情報。blob 換算・正確な按分は未実施）。
 
-### 4. CI 実ログからの復元・保存時間
+## 4. CI 実ログからの復元・保存時間
 
-#### 復元（restore）
+### 復元（restore）
 
 2026-09-16 の `rust-ci / cargo test` run 11 件（同日 11:07〜13:43、cache key `rust-base-ci-Linux-test-49250d9e13f88f2c5ea947301d918eb3249f6452bd082589071020c27f2bc21f`、`actions@latest` SHA `b9b93c859305fbae763c433200fe8277eb4f1339` 時点。いずれも cache blob サイズは `3318233612 B` ≈3165 MB ≈3.09 GiB で一定）のログから `Cache hit for` → `Cache Size` → `Cache restored successfully` のタイムスタンプ差を集計:
 
@@ -72,11 +72,11 @@
 
 （参考値として挙げられていた run `35103799823`: download ≈20.6秒・展開 ≈48.1秒・合計 ≈68.7秒は、上記11サンプルの中央値付近に位置する1サンプル）
 
-#### 保存（save）
+### 保存（save）
 
 直近（2026-09-16 時点）の `Cargo.lock` 最終変更コミットは `376dff60d5`（2026-09-14 マージ）だが、対応する push run が直近 100 run の一覧内に見つからず、保存時間は **未計測（次回 Cargo.lock 変更時に補完）** とする。完全一致キーヒット時は `actions/cache` が保存自体をスキップするため、直近サンプルの大半にも save ログは存在しない。
 
-#### コンパイル時間・テスト実行時間の分離（CI 実ログ、1サンプル）
+### コンパイル時間・テスト実行時間の分離（CI 実ログ、1サンプル）
 
 run `35103799823`（`rust-ci / cargo test` ジョブ、キャッシュ復元済みのインクリメンタルビルド）:
 
@@ -85,12 +85,12 @@ run `35103799823`（`rust-ci / cargo test` ジョブ、キャッシュ復元済�
 
 （参考・別基準）本計測環境（arm64 ネイティブ、cold build、`--no-run`）でのビルド時間: `real 2m3.869s`（`time cargo test --workspace --all-features --no-run`。CI のインクリメンタルビルドとは条件が異なる別基準の値であり、直接比較はできない）
 
-### 5. 整合性チェック
+## 5. 整合性チェック
 
 - `target/debug` サブディレクトリ合計（2.6G+22G+87M+2.3G+12M ≈ 27.0G）と `target` 全体（27G）はおおむね整合（丸め誤差の範囲内）
 - workspace member 内訳の精密な3区分集計は未実施のため、当該整合性チェックは次回計測時に行う
 
-### 6. 参考: 削減見込みサマリ
+## 6. 参考: 削減見込みサマリ
 
 | 対策 | 生 du 値ベース | blob 換算値ベース |
 |---|---|---|
