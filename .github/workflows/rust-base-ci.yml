@@ -319,7 +319,7 @@ jobs:
           alt_names="$(IFS='|'; printf '%s' "${names[*]}")"
           re_unit="^(${alt_pkgs})-[0-9a-f]{16}$"                 # .fingerprint/ build/（package 名・ハイフンのまま）
           re_dep="^(lib)?(${alt_names})-[0-9a-f]{16}(\..+)?$"    # deps/（target 名・`_` 正規化）
-          re_top="^(${alt_names})(\.d)?$"                        # target/debug 直下の uplift バイナリ
+          re_top="^(lib)?(${alt_names})(\.(d|rlib|rmeta|so|a|dylib))?$"  # target/debug 直下の uplift バイナリ（lib prefix・rlib 等の拡張子込み）
 
           removed=0
           safe_rm() {
@@ -492,7 +492,7 @@ jobs:
           alt_names="$(IFS='|'; printf '%s' "${names[*]}")"
           re_unit="^(${alt_pkgs})-[0-9a-f]{16}$"                 # .fingerprint/ build/（package 名・ハイフンのまま）
           re_dep="^(lib)?(${alt_names})-[0-9a-f]{16}(\..+)?$"    # deps/（target 名・`_` 正規化）
-          re_top="^(${alt_names})(\.d)?$"                        # target/debug 直下の uplift バイナリ
+          re_top="^(lib)?(${alt_names})(\.(d|rlib|rmeta|so|a|dylib))?$"  # target/debug 直下の uplift バイナリ（lib prefix・rlib 等の拡張子込み）
 
           removed=0
           safe_rm() {

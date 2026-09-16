@@ -201,8 +201,9 @@ cache 容量（10 GB）を新版キーと合わせて消費する。即時に削
 - **削除する**: `target/debug/examples/`・`target/debug/incremental/`、
   `target/debug/.fingerprint/<member>-<16hex>`・`target/debug/build/<member>-<16hex>`
   （package 名でアンカー）、`target/debug/deps/` 配下の `(lib)?<member|target名（`_`
-  正規化）>-<16hex>(.拡張子)?`、`target/debug/` 直下の uplift された成果物（`*.d` や
-  対応するバイナリ）
+  正規化）>-<16hex>(.拡張子)?`、`target/debug/` 直下の uplift された成果物（`(lib)?<member|
+  target名>(.d|.rlib|.rmeta|.so|.a|.dylib)?` に一致するもの。lib crate の `libfoo.rlib` 等も
+  対象に含む）
 - **残す**: 依存 crate の成果物（`deps/` の依存側 rlib 等）・`~/.cargo` 配下すべて
 - 名前集合は `cargo metadata --no-deps --format-version 1` の
   `.packages[].name`（package 名）と `.packages[].targets[].name`（lib/bin/test/bench/
