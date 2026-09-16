@@ -40,10 +40,19 @@ name: Rust base CI (reusable)
 #   成果物を生成させない（保存後に除外するのではなく生成自体を抑止する）。使い捨て runner
 #   では復元後の差分ビルドで incremental の恩恵が小さい一方、キャッシュ blob を肥大化させる
 #   主因の一つだったため（計測: rust-base-ci/cache-breakdown-2026-09-17.md、イシュー #132）。
-#   あわせてキーへ版セグメント `v2` を追加している。既存キーへの exact hit では
-#   actions/cache が保存をスキップし縮小版が永久に保存されないため、新キー空間へ切り替える
-#   必要があった。restore-keys も新 prefix のみとし旧キー（incremental 込みの大きな blob）
-#   へはフォールバックしない。版を bump する場合は clippy / test 両ジョブを同時に更新する
+# - cache 有効時は cargo 実行ステップ直後・actions/cache の保存（post）より前に workspace
+#   メンバー成果物を prune する。メンバー crate の成果物はソース変更のたびに必ず再ビルドされ
+#   キャッシュ価値がないため（#131 計測で target/debug/deps が全体の約 81.5%、うち大半は
+#   統合テスト・ベンチバイナリ。イシュー #133）。依存 crate の成果物（deps/ の依存側 rlib・
+#   ~/.cargo）は残す
+#   あわせてキーへ版セグメント `v3` を追加している（#132 で導入した `v2` からの bump）。
+#   既存キーへの exact hit では actions/cache が保存をスキップし縮小版が永久に保存されない
+#   ため、新キー空間へ切り替える必要があった。restore-keys は `v3` に加えて `v2` へも
+#   フォールバックする: v2 blob は incremental を含まず（#132 で生成自体を抑止済み）、
+#   prune は保存前に走るため、v2 を復元してビルド・prune した上で v3 として保存しても
+#   縮小の意味は損なわれない（v2→v3 は cold run を挟まずに移行できる）。v2 の
+#   restore-keys 行は v2 blob が evict（7 日）された後に削除してよい。版を bump する場合は
+#   clippy / test 両ジョブを同時に更新する
 #
 # 前提1: runner に正常動作する rustup が導入済みであること。rust-toolchain-setup v1.1.0（#86）
 # 以降、rustup が未導入・破損している場合はネットワーク導入せず fail-closed でエラー終了する。
@@ -207,10 +216,12 @@ jobs:
           fi
 
       - name: Restore cargo cache
-        # キーの `v2` は incremental 成果物を含まない縮小版キャッシュ空間への切り替え
-        # セグメント（#132）。restore-keys も新 prefix のみで旧キーへはフォールバックしない
-        # （旧 blob には incremental が含まれ、復元するとそのまま v2 側にも保存されてしまい
-        # 縮小の意味がなくなるため）。
+        # キーの `v3` は workspace メンバー成果物の保存前 prune を追加した縮小版キャッシュ
+        # 空間への切り替えセグメント（#133。#132 の `v2` からの bump）。restore-keys は
+        # `v3` に加えて `v2` へもフォールバックする: v2 blob は incremental を含まず
+        # （#132）、prune は保存前に走るため v2 を復元してもそのまま安全に v3 として
+        # 保存し直せる（cold run を挟まない移行）。v2 行は v2 blob が evict（7 日）された
+        # 後に削除してよい。
         if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -219,8 +230,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v3-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v3-
             ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v2-
 
       - name: インクリメンタルコンパイルを無効化（cache 有効時のみ）
@@ -246,6 +258,110 @@ jobs:
         run: |
           set -euo pipefail
           cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: workspace メンバー成果物を prune（cache 保存前・cache 有効時のみ）
+        # actions/cache の post（保存）は全 main ステップ終了後に走るため、ここで削除した分は
+        # 保存対象から外れる。メンバー crate の成果物はソース変更で必ず再ビルドされるため
+        # キャッシュ価値がなく、blob を肥大化させる主因だった（#131 計測・#133）。
+        # 依存 crate の成果物（deps/ の依存側 rlib・~/.cargo）は残す。
+        # if: always() は付けない（cargo 失敗時は actions/cache が post-if: success() で
+        # 保存しないため、prune を実行する必要がない）。
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::error::jq が見つかりません（cache: true の prune ステップには jq が必要です）"
+            exit 1
+          fi
+
+          workspace="$(pwd -P)"
+          profile="${workspace}/target/debug"
+          if [ ! -d "${profile}" ]; then
+            echo "target/debug が存在しないため prune をスキップします"
+            exit 0
+          fi
+          if [ -L "${workspace}/target" ] || [ -L "${profile}" ]; then
+            echo "::error::target または target/debug が symlink のため prune を中止します"
+            exit 1
+          fi
+
+          # メンバー package 名 + 全 target 名（lib/bin/test/bench/example）。
+          # --no-deps は依存解決・ネットワーク不要（workspace 内のみを見る）。
+          raw=()
+          while IFS= read -r n; do
+            [ -n "${n}" ] && raw+=("${n}")
+          done < <(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | .name, (.targets[] | select(.kind | index("custom-build") | not) | .name)' \
+            | sort -u)
+          if [ "${#raw[@]}" -eq 0 ]; then
+            echo "::error::cargo metadata から workspace メンバーを取得できませんでした"
+            exit 1
+          fi
+
+          pkgs=(); names=()
+          for n in "${raw[@]}"; do
+            if ! [[ "${n}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+              echo "::error::想定外の crate / target 名を検出したため prune を中止します"
+              echo "名前: ${n}"
+              exit 1
+            fi
+            pkgs+=("${n}")
+            names+=("${n}" "${n//-/_}")
+          done
+          mapfile_pkgs=(); while IFS= read -r n; do mapfile_pkgs+=("${n}"); done < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+          pkgs=("${mapfile_pkgs[@]}")
+          mapfile_names=(); while IFS= read -r n; do mapfile_names+=("${n}"); done < <(printf '%s\n' "${names[@]}" | sort -u)
+          names=("${mapfile_names[@]}")
+
+          alt_pkgs="$(IFS='|'; printf '%s' "${pkgs[*]}")"
+          alt_names="$(IFS='|'; printf '%s' "${names[*]}")"
+          re_unit="^(${alt_pkgs})-[0-9a-f]{16}$"                 # .fingerprint/ build/（package 名・ハイフンのまま）
+          re_dep="^(lib)?(${alt_names})-[0-9a-f]{16}(\..+)?$"    # deps/（target 名・`_` 正規化）
+          re_top="^(${alt_names})(\.d)?$"                        # target/debug 直下の uplift バイナリ
+
+          removed=0
+          safe_rm() {
+            local p="$1"
+            case "${p}" in
+              "${profile}"/*) ;;
+              *)
+                echo "::error::削除対象が target/debug 配下ではありません"
+                echo "${p}"
+                exit 1
+                ;;
+            esac
+            if [ -L "${p}" ]; then
+              echo "::error::symlink は削除対象にしません"
+              echo "${p}"
+              exit 1
+            fi
+            rm -rf -- "${p}"
+            removed=$((removed + 1))
+          }
+          prune_entries() {  # $1=dir $2=regex
+            local dir="$1" re="$2" e b
+            [ -d "${dir}" ] || return 0
+            while IFS= read -r -d '' e; do
+              b="${e##*/}"
+              if [[ "${b}" =~ ${re} ]]; then safe_rm "${e}"; fi
+            done < <(find "${dir}" -mindepth 1 -maxdepth 1 -print0)
+          }
+
+          for d in examples incremental; do
+            [ -e "${profile}/${d}" ] && safe_rm "${profile}/${d}"
+          done
+          prune_entries "${profile}/.fingerprint" "${re_unit}"
+          prune_entries "${profile}/build" "${re_unit}"
+          prune_entries "${profile}/deps" "${re_dep}"
+          while IFS= read -r -d '' e; do
+            b="${e##*/}"
+            if [[ "${b}" =~ ${re_top} ]] || [[ "${b}" == *.d ]]; then safe_rm "${e}"; fi
+          done < <(find "${profile}" -mindepth 1 -maxdepth 1 -type f -print0)
+
+          echo "prune 完了: ${removed} エントリを削除しました"
+          echo "対象 package: ${pkgs[*]}"
 
   # --------------------------------------------------
   # cargo test（ユニット・結合・doc test）。
@@ -275,10 +391,12 @@ jobs:
           fi
 
       - name: Restore cargo cache
-        # キーの `v2` は incremental 成果物を含まない縮小版キャッシュ空間への切り替え
-        # セグメント（#132）。restore-keys も新 prefix のみで旧キーへはフォールバックしない
-        # （旧 blob には incremental が含まれ、復元するとそのまま v2 側にも保存されてしまい
-        # 縮小の意味がなくなるため）。
+        # キーの `v3` は workspace メンバー成果物の保存前 prune を追加した縮小版キャッシュ
+        # 空間への切り替えセグメント（#133。#132 の `v2` からの bump）。restore-keys は
+        # `v3` に加えて `v2` へもフォールバックする: v2 blob は incremental を含まず
+        # （#132）、prune は保存前に走るため v2 を復元してもそのまま安全に v3 として
+        # 保存し直せる（cold run を挟まない移行）。v2 行は v2 blob が evict（7 日）された
+        # 後に削除してよい。
         if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -287,8 +405,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v3-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v3-
             ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v2-
 
       - name: インクリメンタルコンパイルを無効化（cache 有効時のみ）
@@ -312,6 +431,110 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --workspace --all-features
+
+      - name: workspace メンバー成果物を prune（cache 保存前・cache 有効時のみ）
+        # actions/cache の post（保存）は全 main ステップ終了後に走るため、ここで削除した分は
+        # 保存対象から外れる。メンバー crate の成果物はソース変更で必ず再ビルドされるため
+        # キャッシュ価値がなく、blob を肥大化させる主因だった（#131 計測・#133）。
+        # 依存 crate の成果物（deps/ の依存側 rlib・~/.cargo）は残す。
+        # if: always() は付けない（cargo 失敗時は actions/cache が post-if: success() で
+        # 保存しないため、prune を実行する必要がない）。
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::error::jq が見つかりません（cache: true の prune ステップには jq が必要です）"
+            exit 1
+          fi
+
+          workspace="$(pwd -P)"
+          profile="${workspace}/target/debug"
+          if [ ! -d "${profile}" ]; then
+            echo "target/debug が存在しないため prune をスキップします"
+            exit 0
+          fi
+          if [ -L "${workspace}/target" ] || [ -L "${profile}" ]; then
+            echo "::error::target または target/debug が symlink のため prune を中止します"
+            exit 1
+          fi
+
+          # メンバー package 名 + 全 target 名（lib/bin/test/bench/example）。
+          # --no-deps は依存解決・ネットワーク不要（workspace 内のみを見る）。
+          raw=()
+          while IFS= read -r n; do
+            [ -n "${n}" ] && raw+=("${n}")
+          done < <(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | .name, (.targets[] | select(.kind | index("custom-build") | not) | .name)' \
+            | sort -u)
+          if [ "${#raw[@]}" -eq 0 ]; then
+            echo "::error::cargo metadata から workspace メンバーを取得できませんでした"
+            exit 1
+          fi
+
+          pkgs=(); names=()
+          for n in "${raw[@]}"; do
+            if ! [[ "${n}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+              echo "::error::想定外の crate / target 名を検出したため prune を中止します"
+              echo "名前: ${n}"
+              exit 1
+            fi
+            pkgs+=("${n}")
+            names+=("${n}" "${n//-/_}")
+          done
+          mapfile_pkgs=(); while IFS= read -r n; do mapfile_pkgs+=("${n}"); done < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+          pkgs=("${mapfile_pkgs[@]}")
+          mapfile_names=(); while IFS= read -r n; do mapfile_names+=("${n}"); done < <(printf '%s\n' "${names[@]}" | sort -u)
+          names=("${mapfile_names[@]}")
+
+          alt_pkgs="$(IFS='|'; printf '%s' "${pkgs[*]}")"
+          alt_names="$(IFS='|'; printf '%s' "${names[*]}")"
+          re_unit="^(${alt_pkgs})-[0-9a-f]{16}$"                 # .fingerprint/ build/（package 名・ハイフンのまま）
+          re_dep="^(lib)?(${alt_names})-[0-9a-f]{16}(\..+)?$"    # deps/（target 名・`_` 正規化）
+          re_top="^(${alt_names})(\.d)?$"                        # target/debug 直下の uplift バイナリ
+
+          removed=0
+          safe_rm() {
+            local p="$1"
+            case "${p}" in
+              "${profile}"/*) ;;
+              *)
+                echo "::error::削除対象が target/debug 配下ではありません"
+                echo "${p}"
+                exit 1
+                ;;
+            esac
+            if [ -L "${p}" ]; then
+              echo "::error::symlink は削除対象にしません"
+              echo "${p}"
+              exit 1
+            fi
+            rm -rf -- "${p}"
+            removed=$((removed + 1))
+          }
+          prune_entries() {  # $1=dir $2=regex
+            local dir="$1" re="$2" e b
+            [ -d "${dir}" ] || return 0
+            while IFS= read -r -d '' e; do
+              b="${e##*/}"
+              if [[ "${b}" =~ ${re} ]]; then safe_rm "${e}"; fi
+            done < <(find "${dir}" -mindepth 1 -maxdepth 1 -print0)
+          }
+
+          for d in examples incremental; do
+            [ -e "${profile}/${d}" ] && safe_rm "${profile}/${d}"
+          done
+          prune_entries "${profile}/.fingerprint" "${re_unit}"
+          prune_entries "${profile}/build" "${re_unit}"
+          prune_entries "${profile}/deps" "${re_dep}"
+          while IFS= read -r -d '' e; do
+            b="${e##*/}"
+            if [[ "${b}" =~ ${re_top} ]] || [[ "${b}" == *.d ]]; then safe_rm "${e}"; fi
+          done < <(find "${profile}" -mindepth 1 -maxdepth 1 -type f -print0)
+
+          echo "prune 完了: ${removed} エントリを削除しました"
+          echo "対象 package: ${pkgs[*]}"
 
   # --------------------------------------------------
   # cargo deny check（RUSTSEC アドバイザリ監査・依存ライセンス互換性・レジストリ供給元監査）。

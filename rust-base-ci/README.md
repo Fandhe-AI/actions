@@ -20,7 +20,8 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
 - 使用する外部 action はすべてコミット SHA 固定
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
   通常不要なため既定は無効。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
-  設定し incremental 成果物をそもそも生成しない（詳細は「cache の構成」節）
+  設定し incremental 成果物をそもそも生成しない。さらに cargo 実行ステップ直後・
+  cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）
 
 ## ジョブ構成
 
@@ -142,7 +143,7 @@ with:
 | `runner-label` | - | `self-hosted` | 全ジョブを実行する runner ラベル（public は `ubuntu-latest` 等） |
 | `deny-checks` | - | `advisories licenses sources` | `cargo deny check` に渡すチェック名（空白区切り）。`advisories` / `bans` / `licenses` / `sources` のみ許容し、それ以外は fail-closed で拒否 |
 | `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
-| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成しない（キー版セグメント `v2`、「cache の構成」節参照） |
+| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v3`、`v2` へのフォールバックあり。「cache の構成」節参照） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
 | `clippy-timeout-minutes` | - | `30` | `clippy` ジョブの timeout（分） |
@@ -159,31 +160,66 @@ with:
 
 | ジョブ | 対象パス | key |
 |---|---|---|
-| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v2-<Cargo.lock hash>`） |
+| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v3-<Cargo.lock hash>`） |
 | `deny` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`（`target` は含まない） | `<cache-key-prefix>-<os>-deny-<Cargo.lock hash>` |
 
-`restore-keys` はいずれも同じ prefix（`clippy` / `test` は `v2` を含む prefix）の前方一致。
+`restore-keys` は同じ prefix の前方一致。`clippy` / `test` は `v3` に加えて `v2` にも
+フォールバックする（`fmt` / `deny` はバージョンセグメントを持たない）。
 
-`clippy` / `test` の key に含まれる `v2` は、incremental 成果物を含まない縮小版
-キャッシュへ切り替えた版セグメントである。`cache: true` のとき、この 2 ジョブは
-`CARGO_INCREMENTAL=0` を設定して `target/debug/incremental` をそもそも生成しない
-（保存後に除外するのではなく生成自体を抑止する）。使い捨て runner では復元後の差分
-ビルドで incremental の恩恵が小さい一方、`target/debug/incremental` はキャッシュ
-blob を肥大化させる主因の一つだったため（計測:
+`clippy` / `test` の key に含まれる `v3` は、保存前 prune（下記）を追加した縮小版
+キャッシュへ切り替えた版セグメントである（`v2` は incremental 除外のみを行った #132 時点の
+セグメント）。`cache: true` のとき、この 2 ジョブは `CARGO_INCREMENTAL=0` を設定して
+`target/debug/incremental` をそもそも生成しない（保存後に除外するのではなく生成自体を
+抑止する）。使い捨て runner では復元後の差分ビルドで incremental の恩恵が小さい一方、
+`target/debug/incremental` はキャッシュ blob を肥大化させる主因の一つだったため（計測:
 [`rust-base-ci/cache-breakdown-2026-09-17.md`](./cache-breakdown-2026-09-17.md)、
 イシュー #132）。
 
 既存キーへの exact hit では `actions/cache` が保存をスキップし縮小版が永久に
-保存されないため、`v2` セグメントで新しいキー空間に切り替えている。`restore-keys` も
-新 prefix のみとし、旧キー（incremental を含む大きな blob）へはフォールバックしない。
-そのため **`v2` のような版セグメントを bump した直後は `clippy` / `test` が 1 回だけ
-cold になる**（旧キャッシュを復元しないため）。
+保存されないため、`v3` セグメントで新しいキー空間に切り替えている。`restore-keys` は
+`v3` に加えて `v2` へもフォールバックする: `v2` の blob は incremental を含まず
+（#132 で生成自体を抑止済み）、prune は保存前に走るため、`v2` を復元してビルド・prune
+した上で `v3` として保存し直しても縮小の意味は損なわれない。そのため **`v2` → `v3` の
+bump では cold run を挟まない**（`v2` から `v3` へフォールバックしない bump を行う場合は
+旧キャッシュを復元しないため 1 回だけ cold になる）。`v2` の `restore-keys` 行は `v2`
+blob が evict（7 日）された後に削除してよい。
 
 `cache: false`（既定）では該当ステップがすべて skip され挙動は変わらない。
 
 旧版キーの blob は 7 日間アクセスが無ければ自動 evict されるが、それまではリポジトリの
 cache 容量（10 GB）を新版キーと合わせて消費する。即時に削除したい場合は呼び出し側で
 `gh cache delete` を実行する。
+
+### 保存前 prune（`clippy` / `test`）
+
+`cache: true` のとき、`clippy` / `test` ジョブは `cargo clippy` / `cargo test`
+実行直後・`actions/cache` の保存（post）より前に、workspace メンバーの成果物を
+`target/debug` から削除する（イシュー #133）。メンバー crate の成果物はソースが
+変わるたびに必ず再ビルドされるためキャッシュに含める価値がなく、`target/debug/deps`
+の肥大化（#131 計測で全体の約 81.5%、大半は統合テスト・ベンチバイナリ）の主因だった。
+
+- **削除する**: `target/debug/examples/`・`target/debug/incremental/`、
+  `target/debug/.fingerprint/<member>-<16hex>`・`target/debug/build/<member>-<16hex>`
+  （package 名でアンカー）、`target/debug/deps/` 配下の `(lib)?<member|target名（`_`
+  正規化）>-<16hex>(.拡張子)?`、`target/debug/` 直下の uplift された成果物（`*.d` や
+  対応するバイナリ）
+- **残す**: 依存 crate の成果物（`deps/` の依存側 rlib 等）・`~/.cargo` 配下すべて
+- 名前集合は `cargo metadata --no-deps --format-version 1` の
+  `.packages[].name`（package 名）と `.packages[].targets[].name`（lib/bin/test/bench/
+  example の target 名）の和集合から取得する。統合テスト・ベンチ・example バイナリは
+  package 名ではなく target 名で命名されるため、package 名だけでは主要な肥大要因を
+  取り逃す
+- ハッシュ（`-[0-9a-f]{16}`）で末尾をアンカーした上で照合し、`<name>-*` のような glob は
+  使わない。`foo` というメンバーが依存 `foo-utils-<hash>` を誤って削除しないようにする
+  ため
+- 削除は `target/debug` 配下に厳密に限定する（`rm -rf` 前に prefix を検査し、
+  `target` / `target/debug` が symlink なら中止）。`~/.cargo` には一切触れない
+- `cache: true` で本 prune を使う場合、runner に `jq` が導入済みであること（GitHub
+  ホステッドは同梱。self-hosted で `cache: true` にする場合は前提として用意する）
+- **既知の限界**: メンバーに `build.rs` がある場合、`build/<member>-<hash>/` を消すため
+  毎 run で build script が再実行される。メンバーの target 名が依存 crate 名と
+  偶然一致する場合（例: 統合テスト名が依存名と同じ）はその依存も削除され再ビルドされる
+  （正しさには影響しない）
 
 ## 参照バージョン（`@latest`）
 
@@ -224,8 +260,12 @@ gh api repos/actions/cache/git/tags/<tag-object-sha> --jq '.object.sha'
   できないため。ジョブ単位の `if:` に変更してはならない
 - **cache はホステッド runner 向けのオプトイン**。workspace と `~/.cargo` が永続する
   self-hosted runner では復元コストのほうが大きく、既定 (`false`) のままでよい
-- `clippy` / `test` の cache key の版セグメント（`v2` 等）を bump した直後は、旧キーへ
-  フォールバックしないため対象ジョブが 1 回だけ cold になる（「cache の構成」節参照）
+- `clippy` / `test` の cache key の版セグメントを bump した際、旧キーへフォールバック
+  しない bump（`v2` 導入時の #132 相当）は対象ジョブが 1 回だけ cold になる。`v2` → `v3`
+  （#133）のように旧キーへフォールバックする bump では cold にならない（「cache の構成」
+  節参照）
+- self-hosted runner で `cache: true` を使う場合、保存前 prune ステップに `jq` が必要
+  （GitHub ホステッドは同梱。「cache の構成」節参照）
 - `cargo deny` は `--locked` 付きで実行するため、`Cargo.lock` が最新でない場合は失敗する
   （`Cargo.lock` の意図しない書き換え・runner 汚染を防ぐための意図的な挙動）
 - checkout は `persist-credentials: false`・`submodules: false`（既定）で行う。submodule に
