@@ -170,10 +170,11 @@ with:
 キャッシュへ切り替えた版セグメントである（`v2` は incremental 除外のみを行った #132 時点の
 セグメント）。`cache: true` のとき、この 2 ジョブは `CARGO_INCREMENTAL=0` を設定して
 `target/debug/incremental` をそもそも生成しない（保存後に除外するのではなく生成自体を
-抑止する）。使い捨て runner では復元後の差分ビルドで incremental の恩恵が小さい一方、
-`target/debug/incremental` はキャッシュ blob を肥大化させる主因の一つだったため（計測:
-[`rust-base-ci/cache-breakdown-2026-09-17.md`](./cache-breakdown-2026-09-17.md)、
-イシュー #132）。
+抑止する）。使い捨て runner では復元後の差分ビルドで incremental の恩恵が小さいため
+導入したが、**`v2`（incremental 抑止のみ）の実 CI 計測では blob 縮小への寄与は確認できず**、イシュー #131 の生 du 値
+ベースの推定（約9.6%）とは異なり、実測では blob は縮小せず 3165 MB → 3940 MB と増加した
+（詳細・非後退判定: [`rust-base-ci/cache-before-after-2026-09-17.md`](./cache-before-after-2026-09-17.md)、
+イシュー #134）。blob の縮小は `v3` の保存前 prune（下記）に依存する。
 
 既存キーへの exact hit では `actions/cache` が保存をスキップし縮小版が永久に
 保存されないため、`v3` セグメントで新しいキー空間に切り替えている。`restore-keys` は
@@ -189,6 +190,20 @@ blob が evict（7 日）された後に削除してよい。
 旧版キーの blob は 7 日間アクセスが無ければ自動 evict されるが、それまではリポジトリの
 cache 容量（10 GB）を新版キーと合わせて消費する。即時に削除したい場合は呼び出し側で
 `gh cache delete` を実行する。
+
+### before/after 実測サマリ（#134）
+
+`Fandhe-AI/fandhe-ai` の `rust-ci / cargo test`（exact hit ケース）での実測値。
+
+| バージョン | blob サイズ | 復元 | test ジョブ合計 |
+|---|---|---|---|
+| v1（incremental 抑止なし・prune なし） | 3165 MB | 約67秒 | 約7分41秒（n=11 中央値） |
+| v2（incremental 抑止のみ） | 3940 MB | 約3分10秒 | 9分04秒 |
+| v3（+ 保存前 prune） | 未計測 | 未計測 | 未計測 |
+
+v2 は全指標で v1 より後退している。v3 の非後退判定は保留（v3 の実 CI run が未発生のため。
+詳細・仮説・補完手順は
+[`rust-base-ci/cache-before-after-2026-09-17.md`](./cache-before-after-2026-09-17.md) を参照）。
 
 ### 保存前 prune（`clippy` / `test`）
 
@@ -270,6 +285,13 @@ gh api repos/actions/cache/git/tags/<tag-object-sha> --jq '.object.sha'
   節参照）
 - self-hosted runner で `cache: true` を使う場合、保存前 prune ステップに `jq` が必要
   （GitHub ホステッドは同梱。「cache の構成」節参照）
+- **リポジトリの cache 容量上限（10 GB）による evict は `restore-keys` の前方一致
+  フォールバックを機能させなくする**。呼び出し側リポジトリで本 workflow 以外にも
+  大きな cache（`target-build-*` 等）を保存している場合、上限に張り付いて他ジョブの
+  保存が旧 ref の cache を追い出し、想定した exact hit / prefix フォールバックが
+  cold にフォールバックすることがある（実測: #134、
+  [`rust-base-ci/cache-before-after-2026-09-17.md`](./cache-before-after-2026-09-17.md)）。
+  呼び出し側全体の cache 使用量は `gh cache list -R <owner>/<repo>` で確認できる
 - `cargo deny` は `--locked` 付きで実行するため、`Cargo.lock` が最新でない場合は失敗する
   （`Cargo.lock` の意図しない書き換え・runner 汚染を防ぐための意図的な挙動）
 - checkout は `persist-credentials: false`・`submodules: false`（既定）で行う。submodule に

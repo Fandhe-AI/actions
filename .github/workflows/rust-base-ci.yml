@@ -38,8 +38,10 @@ name: Rust base CI (reusable)
 #   （README のセットアップ例参照）
 # - cache 有効時（clippy / test ジョブのみ）は `CARGO_INCREMENTAL=0` を設定し incremental
 #   成果物を生成させない（保存後に除外するのではなく生成自体を抑止する）。使い捨て runner
-#   では復元後の差分ビルドで incremental の恩恵が小さい一方、キャッシュ blob を肥大化させる
-#   主因の一つだったため（計測: rust-base-ci/cache-breakdown-2026-09-17.md、イシュー #132）。
+#   では復元後の差分ビルドで incremental の恩恵が小さいため導入したが、v2（incremental
+#   抑止のみ）の実 CI 計測では blob 縮小への寄与は確認できなかった（#131 の生 du 値ベースの
+#   推定では約 9.6% だったが実測とは一致せず）。blob の縮小は下記の保存前 prune（v3）に
+#   依存する（計測: rust-base-ci/cache-before-after-2026-09-17.md、イシュー #134）。
 # - cache 有効時は cargo 実行ステップ直後・actions/cache の保存（post）より前に workspace
 #   メンバー成果物を prune する。メンバー crate の成果物はソース変更のたびに必ず再ビルドされ
 #   キャッシュ価値がないため（#131 計測で target/debug/deps が全体の約 81.5%、うち大半は
