@@ -194,16 +194,17 @@ cache 容量（10 GB）を新版キーと合わせて消費する。即時に削
 
 `cache: true` のとき、`clippy` / `test` ジョブは `cargo clippy` / `cargo test`
 実行直後・`actions/cache` の保存（post）より前に、workspace メンバーの成果物を
-`target/debug` から削除する（イシュー #133）。メンバー crate の成果物はソースが
+`target/debug`（および `.cargo/config.toml` の `build.target` 指定時に生成される
+`target/<triple>/debug`）から削除する（イシュー #133）。メンバー crate の成果物はソースが
 変わるたびに必ず再ビルドされるためキャッシュに含める価値がなく、`target/debug/deps`
 の肥大化（#131 計測で全体の約 81.5%、大半は統合テスト・ベンチバイナリ）の主因だった。
 
-- **削除する**: `target/debug/examples/`・`target/debug/incremental/`、
-  `target/debug/.fingerprint/<member>-<16hex>`・`target/debug/build/<member>-<16hex>`
-  （package 名でアンカー）、`target/debug/deps/` 配下の `(lib)?<member|target名（`_`
-  正規化）>-<16hex>(.拡張子)?`、`target/debug/` 直下の uplift された成果物（`(lib)?<member|
-  target名>(.d|.rlib|.rmeta|.so|.a|.dylib)?` に一致するもの。lib crate の `libfoo.rlib` 等も
-  対象に含む）
+- **削除する**: `target/debug`（および `build.target` 指定時の `target/<triple>/debug`）
+  配下の `examples/`・`incremental/`、`.fingerprint/<member>-<16hex>`・
+  `build/<member>-<16hex>`（package 名でアンカー）、`deps/` 配下の
+  `(lib)?<member|target名（`_`正規化）>-<16hex>(.拡張子)?`、直下の uplift された成果物
+  （`(lib)?<member|target名>(.d|.rlib|.rmeta|.so|.a|.dylib)?` に一致するもの。lib crate の
+  `libfoo.rlib` 等も対象に含む）。いずれも各 profile ディレクトリ配下のみが対象
 - **残す**: 依存 crate の成果物（`deps/` の依存側 rlib 等）・`~/.cargo` 配下すべて
 - 名前集合は `cargo metadata --no-deps --format-version 1` の
   `.packages[].name`（package 名）と `.packages[].targets[].name`（lib/bin/test/bench/
@@ -213,8 +214,10 @@ cache 容量（10 GB）を新版キーと合わせて消費する。即時に削
 - ハッシュ（`-[0-9a-f]{16}`）で末尾をアンカーした上で照合し、`<name>-*` のような glob は
   使わない。`foo` というメンバーが依存 `foo-utils-<hash>` を誤って削除しないようにする
   ため
-- 削除は `target/debug` 配下に厳密に限定する（`rm -rf` 前に prefix を検査し、
-  `target` / `target/debug` が symlink なら中止）。`~/.cargo` には一切触れない
+- 削除は `target/debug`・`target/<triple>/debug`（`build.target` 指定時）の各
+  profile ディレクトリ配下に厳密に限定する（`rm -rf` 前に prefix を検査し、
+  `target` / 対象 profile ディレクトリが symlink なら中止）。`~/.cargo` には
+  一切触れない
 - `cache: true` で本 prune を使う場合、runner に `jq` が導入済みであること（GitHub
   ホステッドは同梱。self-hosted で `cache: true` にする場合は前提として用意する）
 - **既知の限界**: メンバーに `build.rs` がある場合、`build/<member>-<hash>/` を消すため

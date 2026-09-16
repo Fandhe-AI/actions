@@ -307,7 +307,7 @@ jobs:
           # 無エスケープのまま正規表現へ埋め込んでも安全（#133 レビュー指摘対応）。
           pkgs=(); names=()
           for n in "${raw[@]}"; do
-            if ! printf '%s' "${n}" | grep -qP '^[\p{L}\p{N}_-]+$'; then
+            if ! jq -n --arg n "${n}" '$n | test("^[\\p{L}\\p{N}_-]+$")' | grep -q '^true$'; then
               echo "::error::想定外の crate / target 名を検出したため prune を中止します"
               echo "名前: ${n}"
               exit 1
@@ -513,7 +513,7 @@ jobs:
           # 無エスケープのまま正規表現へ埋め込んでも安全（#133 レビュー指摘対応）。
           pkgs=(); names=()
           for n in "${raw[@]}"; do
-            if ! printf '%s' "${n}" | grep -qP '^[\p{L}\p{N}_-]+$'; then
+            if ! jq -n --arg n "${n}" '$n | test("^[\\p{L}\\p{N}_-]+$")' | grep -q '^true$'; then
               echo "::error::想定外の crate / target 名を検出したため prune を中止します"
               echo "名前: ${n}"
               exit 1
