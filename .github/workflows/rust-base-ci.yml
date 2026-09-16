@@ -36,6 +36,14 @@ name: Rust base CI (reusable)
 #   RUSTUP_TOOLCHAIN=stable でビルドする必要があるため（deny ジョブのコメント参照）
 # - concurrency は reusable workflow のトップレベルでは機能しないため呼び出し側で設定する
 #   （README のセットアップ例参照）
+# - cache 有効時（clippy / test ジョブのみ）は `CARGO_INCREMENTAL=0` を設定し incremental
+#   成果物を生成させない（保存後に除外するのではなく生成自体を抑止する）。使い捨て runner
+#   では復元後の差分ビルドで incremental の恩恵が小さい一方、キャッシュ blob を肥大化させる
+#   主因の一つだったため（計測: rust-base-ci/cache-breakdown-2026-09-17.md、イシュー #132）。
+#   あわせてキーへ版セグメント `v2` を追加している。既存キーへの exact hit では
+#   actions/cache が保存をスキップし縮小版が永久に保存されないため、新キー空間へ切り替える
+#   必要があった。restore-keys も新 prefix のみとし旧キー（incremental 込みの大きな blob）
+#   へはフォールバックしない。版を bump する場合は clippy / test 両ジョブを同時に更新する
 #
 # 前提1: runner に正常動作する rustup が導入済みであること。rust-toolchain-setup v1.1.0（#86）
 # 以降、rustup が未導入・破損している場合はネットワーク導入せず fail-closed でエラー終了する。
@@ -199,6 +207,10 @@ jobs:
           fi
 
       - name: Restore cargo cache
+        # キーの `v2` は incremental 成果物を含まない縮小版キャッシュ空間への切り替え
+        # セグメント（#132）。restore-keys も新 prefix のみで旧キーへはフォールバックしない
+        # （旧 blob には incremental が含まれ、復元するとそのまま v2 側にも保存されてしまい
+        # 縮小の意味がなくなるため）。
         if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -207,9 +219,20 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v2-
+
+      - name: インクリメンタルコンパイルを無効化（cache 有効時のみ）
+        # cache: true のときだけ CARGO_INCREMENTAL=0 を設定する（Restore cargo cache と
+        # 同一条件）。incremental ディレクトリの削除ではなく生成自体の抑止であり、以降の
+        # ステップ（toolchain setup・cargo clippy）に効く。使い捨て runner では復元後の
+        # 差分ビルドの恩恵が小さい一方、キャッシュ blob を肥大化させていたため（#132）。
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CARGO_INCREMENTAL=0" >> "${GITHUB_ENV}"
 
       - name: Setup Rust toolchain (clippy)
         if: steps.detect.outputs.has_cargo == 'true'
@@ -252,6 +275,10 @@ jobs:
           fi
 
       - name: Restore cargo cache
+        # キーの `v2` は incremental 成果物を含まない縮小版キャッシュ空間への切り替え
+        # セグメント（#132）。restore-keys も新 prefix のみで旧キーへはフォールバックしない
+        # （旧 blob には incremental が含まれ、復元するとそのまま v2 側にも保存されてしまい
+        # 縮小の意味がなくなるため）。
         if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -260,9 +287,20 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v2-
+
+      - name: インクリメンタルコンパイルを無効化（cache 有効時のみ）
+        # cache: true のときだけ CARGO_INCREMENTAL=0 を設定する（Restore cargo cache と
+        # 同一条件）。incremental ディレクトリの削除ではなく生成自体の抑止であり、以降の
+        # ステップ（toolchain setup・cargo test）に効く。使い捨て runner では復元後の
+        # 差分ビルドの恩恵が小さい一方、キャッシュ blob を肥大化させていたため（#132）。
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CARGO_INCREMENTAL=0" >> "${GITHUB_ENV}"
 
       - name: Setup Rust toolchain
         if: steps.detect.outputs.has_cargo == 'true'

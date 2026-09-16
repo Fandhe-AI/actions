@@ -19,7 +19,8 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
   （`cargo-deny` の MSRV が呼び出し側の固定チャネルより新しい場合の失敗を避けるため）
 - 使用する外部 action はすべてコミット SHA 固定
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
-  通常不要なため既定は無効
+  通常不要なため既定は無効。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
+  設定し incremental 成果物をそもそも生成しない（詳細は「cache の構成」節）
 
 ## ジョブ構成
 
@@ -111,7 +112,8 @@ jobs:
     uses: Fandhe-AI/actions/.github/workflows/rust-base-ci.yml@latest
     with:
       runner-label: ubuntu-latest
-      # ホステッド runner は毎回まっさらなため cache が効く
+      # ホステッド runner は毎回まっさらなため cache が効く。clippy / test では
+      # CARGO_INCREMENTAL=0 により incremental 成果物を生成しないためキャッシュが肥大化しない
       cache: true
 ```
 
@@ -140,7 +142,7 @@ with:
 | `runner-label` | - | `self-hosted` | 全ジョブを実行する runner ラベル（public は `ubuntu-latest` 等） |
 | `deny-checks` | - | `advisories licenses sources` | `cargo deny check` に渡すチェック名（空白区切り）。`advisories` / `bans` / `licenses` / `sources` のみ許容し、それ以外は fail-closed で拒否 |
 | `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
-| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン） |
+| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成しない（キー版セグメント `v2`、「cache の構成」節参照） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
 | `clippy-timeout-minutes` | - | `30` | `clippy` ジョブの timeout（分） |
@@ -150,6 +152,38 @@ with:
 コマンドの自由記述入力（`fmt-args` / `clippy-args` 等）は意図的に設けていない。移行元
 2 リポジトリでコマンドに差分が無く、`run:` 内での非クォート展開（単語分割）という
 シェル注入面だけが増えるため。
+
+## cache の構成
+
+`cache: true` のとき、`actions/cache` で以下を restore/save する。
+
+| ジョブ | 対象パス | key |
+|---|---|---|
+| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v2-<Cargo.lock hash>`） |
+| `deny` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`（`target` は含まない） | `<cache-key-prefix>-<os>-deny-<Cargo.lock hash>` |
+
+`restore-keys` はいずれも同じ prefix（`clippy` / `test` は `v2` を含む prefix）の前方一致。
+
+`clippy` / `test` の key に含まれる `v2` は、incremental 成果物を含まない縮小版
+キャッシュへ切り替えた版セグメントである。`cache: true` のとき、この 2 ジョブは
+`CARGO_INCREMENTAL=0` を設定して `target/debug/incremental` をそもそも生成しない
+（保存後に除外するのではなく生成自体を抑止する）。使い捨て runner では復元後の差分
+ビルドで incremental の恩恵が小さい一方、`target/debug/incremental` はキャッシュ
+blob を肥大化させる主因の一つだったため（計測:
+[`rust-base-ci/cache-breakdown-2026-09-17.md`](./cache-breakdown-2026-09-17.md)、
+イシュー #132）。
+
+既存キーへの exact hit では `actions/cache` が保存をスキップし縮小版が永久に
+保存されないため、`v2` セグメントで新しいキー空間に切り替えている。`restore-keys` も
+新 prefix のみとし、旧キー（incremental を含む大きな blob）へはフォールバックしない。
+そのため **`v2` のような版セグメントを bump した直後は `clippy` / `test` が 1 回だけ
+cold になる**（旧キャッシュを復元しないため）。
+
+`cache: false`（既定）では該当ステップがすべて skip され挙動は変わらない。
+
+旧版キーの blob は 7 日間アクセスが無ければ自動 evict されるが、それまではリポジトリの
+cache 容量（10 GB）を新版キーと合わせて消費する。即時に削除したい場合は呼び出し側で
+`gh cache delete` を実行する。
 
 ## 参照バージョン（`@latest`）
 
@@ -190,6 +224,8 @@ gh api repos/actions/cache/git/tags/<tag-object-sha> --jq '.object.sha'
   できないため。ジョブ単位の `if:` に変更してはならない
 - **cache はホステッド runner 向けのオプトイン**。workspace と `~/.cargo` が永続する
   self-hosted runner では復元コストのほうが大きく、既定 (`false`) のままでよい
+- `clippy` / `test` の cache key の版セグメント（`v2` 等）を bump した直後は、旧キーへ
+  フォールバックしないため対象ジョブが 1 回だけ cold になる（「cache の構成」節参照）
 - `cargo deny` は `--locked` 付きで実行するため、`Cargo.lock` が最新でない場合は失敗する
   （`Cargo.lock` の意図しない書き換え・runner 汚染を防ぐための意図的な挙動）
 - checkout は `persist-credentials: false`・`submodules: false`（既定）で行う。submodule に
