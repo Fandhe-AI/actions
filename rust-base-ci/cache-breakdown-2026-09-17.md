@@ -62,7 +62,7 @@
 
 ### 復元（restore）
 
-2026-09-16 の `rust-ci / cargo test` run 11 件（同日 11:07〜13:43、cache key `rust-base-ci-Linux-test-49250d9e13f88f2c5ea947301d918eb3249f6452bd082589071020c27f2bc21f`、`actions@latest` SHA `b9b93c859305fbae763c433200fe8277eb4f1339` 時点。いずれも cache blob サイズは `3318233612 B` ≈3165 MB ≈3.09 GiB で一定）のログから `Cache hit for` → `Cache Size` → `Cache restored successfully` のタイムスタンプ差を集計:
+2026-09-16 の `rust-ci / cargo test` run 11 件（同日 11:07〜13:43、cache key `rust-base-ci-Linux-test-49250d9e13f88f2c5ea947301d918eb3249f6452bd082589071020c27f2bc21f`、`actions@latest` SHA `b9b93c859305fbae763c433200fe8277eb4f1339` 時点。いずれも cache blob サイズは `3318233612 B` ≈3165 MiB ≈3.09 GiB で一定）のログから `Cache hit for` → `Cache Size` → `Cache restored successfully` のタイムスタンプ差を集計:
 
 | 区間 | min | median | max |
 |---|---|---|---|
@@ -81,7 +81,8 @@
 run `35103799823`（`rust-ci / cargo test` ジョブ、キャッシュ復元済みのインクリメンタルビルド）:
 
 - コンパイル: `` Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 31s ``（cargo 自身の報告値。fandhe-ai#1918 の「再コンパイル約3分16秒」とは条件差分がある可能性があるため単純比較不可。同一粒度での before/after 比較は #134 側で改めて行うこと）
-- テスト実行: 最初の `Compiling` 行〜最後の `test result:` 行のタイムスタンプ差から算出して約3分50秒
+- コンパイル＋テスト実行の合計: 最初の `Compiling` 行〜最後の `test result:` 行のタイムスタンプ差から算出して約3分50秒（この区間は上記コンパイル 2m31s を内包する）
+- テスト実行のみ（推定）: 上記合計から cargo 報告のコンパイル時間を差し引いた約1分19秒（3m50s − 2m31s。テストバイナリ起動〜終了のみを直接計測した値ではない）
 
 （参考・別基準）本計測環境（arm64 ネイティブ、cold build、`--no-run`）でのビルド時間: `real 2m3.869s`（`time cargo test --workspace --all-features --no-run`。CI のインクリメンタルビルドとは条件が異なる別基準の値であり、直接比較はできない）
 
