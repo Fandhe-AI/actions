@@ -36,7 +36,7 @@
 |---|---|---|---|---|---|
 | v1（n=11 中央値） | 2026-09-16 11:07〜13:43 の 11 run（#131、代表 [`35103799823`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35103799823)） | 3165 MB (3318233612 B、固定) | 66.7秒（download 16.5秒 + 展開 49.0秒、n=11 中央値） | 2m31s（代表 run 実測） | **7m41s**（n=11 中央値） |
 | v2 | [`35141396593`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35141396593) / job `104946516703`（2026-09-16 19:34） | 3940 MB (4131177220 B) | 3m10s（download 19.2秒 + 展開 2m50.8秒） | 2m45s | 9m04s |
-| v3 | **未計測**（§6 参照） | - | - | - | - |
+| v3 | [`35170879552`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35170879552) / job `105042072798`（2026-09-17 01:31、PR #1990 2 回目 push。§6-2） | 100 MB (104356387 B) | 4秒（`Cache hit for: ...-test-v3-e7fa89ec...`、01:31:29〜01:31:32） | 4m31s | **4m58s** |
 
 ### 2-2. prefix フォールバック（`restore-keys` 経由）
 
@@ -44,7 +44,7 @@
 |---|---|---|---|---|---|
 | v1 | 未計測（#131 は exact hit 11 件のみ採取） | - | - | - | - |
 | v2 | [`35139303905`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35139303905) / job `104939510927`（2026-09-16 19:14, PR） | v2 の別キー blob（3940 MB） | 2m57s（download 38秒 + 展開 2m19秒） | 2m26s | 9m54s |
-| v3 | **未計測**（§6 参照） | - | - | - | - |
+| v3（`v2` → `v3` 保存） | [`35170065578`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35170065578) / job `105039623501`（2026-09-17 01:19、PR #1990 1 回目 push。§6-2） | v2 blob（3940 MB、`Cache hit for restore-key: ...-test-v2-e7fa89ec...`） | 1m45s（`Restore cargo cache` ステップ。download 約31秒 + 展開 約1m13秒） | 5m41s | 7m56s（prune 16秒〈1432 エントリ削除〉・保存 6秒〈`Sent 104356387 of 104356387`〉を含む） |
 
 ### 2-3. cold（`Cache not found`）
 
@@ -54,11 +54,13 @@
 | v2（PR） | [`35135521345`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35135521345) / job `104926790709`（2026-09-16 18:37） | `Cache not found` | 2m05s | 約63秒 | 7m02s |
 | v2（main） | [`35136578966`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35136578966) / job `104930351128`（2026-09-16 18:47） | `Cache not found` | 2m01s | 約62秒 | 7m34s |
 | v2（main、10GB 上限 evict 後） | [`35142396152`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35142396152) attempt 1 / job `104949874123`（2026-09-16 19:44） | `Cache not found`（19:23 の PR ref 保存が main の v2 blob を evict） | 2m07s | あり（`v2-e7fa...`、4131166571 B、19:52） | 7m34s |
-| v3 | **未計測**（自然発生する `Cargo.lock` 変更 push を待つ。§6 補完手順を参照） | - | - | - | - |
+| v3 | 未計測（`Cargo.lock` 変更 push が未発生。§6-2 の 2 run はいずれも `Cache not found` にならず、1 回目は v2 からの prefix フォールバック〈§2-2〉だった） | - | - | - | - |
 
 ## 3. 非後退判定（同一ケース同士の比較。exact hit を主系列とする）
 
-**保留（未達ではなく、v3 の実測データが未取得のため判定不能）**。
+**非後退・短縮を確認（2026-09-17 追記）**。v1 exact hit（test ジョブ合計 7m41s、n=11 中央値）に対し v3 exact hit（§2-1、run `35170879552`）は **4m58s**（−2m43s、約 35% 短縮）。blob は 3165 MB → 100 MB、復元は 66.7秒 → 4秒。`cargo test` ステップ自体は prune によるメンバー crate 再ビルドで 2m31s → 4m31s に伸びるが、復元短縮が上回り合計では短縮した（判定は計画どおり test ジョブ合計で行う）。v3 の exact hit サンプルは 1 件（n=1）であり、v1 の n=11 中央値との比較である点に留意する。以下は本ラウンド（2026-09-17 00:xx 時点）の記述をそのまま残す。
+
+（当初記述）**保留（未達ではなく、v3 の実測データが未取得のため判定不能）**。
 
 v1 exact hit（test ジョブ合計 7m41s、n=11 中央値）と比較できる v3 exact hit のサンプルを
 本ラウンドでは取得できなかった（理由・経緯は §6 参照）。v2 exact hit（9m04s）は v1 より
@@ -103,7 +105,9 @@ v2 blob を追い出し、19:44 の main run が cold になった。**prefix �
 
 ## 5. `rust-ci` 4 ジョブの green 確認
 
-v3 workflow 定義での実行そのものが未取得のため（§6）、v3 版での 4 ジョブ green は
+**2026-09-17 追記**: v3 workflow 定義で実行された PR #1990 の 2 run（§6-2）で、`fmt`（0m17s／0m13s）・`clippy`（0m59s／0m52s）・`test`（7m56s／4m58s）・`deny`（2m30s／2m15s）と集約ジョブ `rust-base-ci-complete` がいずれも `success` であることを確認した。`clippy` / `test` の prune ステップも両 run で実行された（test: 1432 エントリ削除）。
+
+（当初記述）v3 workflow 定義での実行そのものが未取得のため（§6）、v3 版での 4 ジョブ green は
 本ラウンドでは確認できていない。参考として、`v2` workflow 定義（rerun で再実行された
 [`35142396152`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35142396152) attempt 2）
 では `fmt` / `clippy` / `test` / `deny` の 4 ジョブと集約ジョブ
@@ -186,6 +190,21 @@ jobs）では、run 内の**全ジョブを対象とする再実行**（`gh run 
 - **v2 blob 増大の仮説検証**: `rust-base-ci-Linux-test-49250d9e...`（v1 キー）を保存した
   run のログ検索により Cargo.lock 変更 push 時点の blob 生成経緯を確認できれば、§4-1 の
   仮説のどちらが妥当か判定できる。本ラウンドでは未実施（次回計測で補完）
+
+### 6-2. 補完結果（2026-09-17。§6-1 手順 1〜4 を実施）
+
+`Fandhe-AI/fandhe-ai` で docs PR [#1990](https://github.com/Fandhe-AI/fandhe-ai/pull/1990)（`.claude/rules/ci.md` のみ変更。`Cargo.lock` 不変・ハッシュ `e7fa89ec...`）を 2 回 push し、`rust-ci / cargo test` を 2 run 採取した。
+
+| push | run / job | 復元 | 保存 | test ジョブ合計 |
+|---|---|---|---|---|
+| 1 回目（01:18 UTC） | [`35170065578`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35170065578) / `105039623501` | `Cache hit for restore-key: ...-test-v2-e7fa89ec...`（3940 MB、1m45s） | `Cache saved with key: ...-test-v3-e7fa89ec...`（104356387 B、`refs/pull/1990/merge`） | 7m56s（§2-2） |
+| 2 回目（01:31 UTC） | [`35170879552`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35170879552) / `105042072798` | `Cache hit for: ...-test-v3-e7fa89ec...`（100 MB、4秒） | `Cache hit occurred on the primary key ..., not saving cache.` | 4m58s（§2-1） |
+
+- §6-1 の「最初の自然 run は v2 からの prefix フォールバックになる」という予測どおりの順序で観測された。1 回目で保存した v3 blob は 2 回目まで evict されなかった
+- v3 blob は PR ref（`refs/pull/1990/merge`）に保存されたため main からは不可視。PR #1990 の squash マージ後の main 初回 run は再度 v2 からのフォールバックとなり、その run が main ref の v3 blob を保存する（§4-2）
+- §6-1 手順 5（`gh run rerun` 全ジョブ再実行による `latest` 再解決）は、自然 run が発生したため未検証のまま
+- 採取: `gh run view -R Fandhe-AI/fandhe-ai <run> --json jobs`（ジョブ時間）・`gh run view --job <id> --log`（復元・保存行）・`gh api repos/Fandhe-AI/fandhe-ai/actions/jobs/<id>`（ステップ時間）・`gh cache list -R Fandhe-AI/fandhe-ai`
+- 利用側の記録: Fandhe-AI/fandhe-ai#1918（同内容のコメント）。本結果により #130 はクローズ済み
 
 ## 参考
 
