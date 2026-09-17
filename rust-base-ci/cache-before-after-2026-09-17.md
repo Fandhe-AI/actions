@@ -58,7 +58,7 @@
 
 ## 3. 非後退判定（同一ケース同士の比較。exact hit を主系列とする）
 
-**非後退・短縮を確認（2026-09-17 追記）**。v1 exact hit（test ジョブ合計 7m41s、n=11 中央値）に対し v3 exact hit（§2-1、run `35170879552`）は **4m58s**（−2m43s、約 35% 短縮）。blob は 3165 MB → 100 MB、復元は 66.7秒 → 4秒。`cargo test` ステップ自体は prune によるメンバー crate 再ビルドで 2m31s → 4m31s に伸びるが、復元短縮が上回り合計では短縮した（判定は計画どおり test ジョブ合計で行う）。v3 の exact hit サンプルは 1 件（n=1）であり、v1 の n=11 中央値との比較である点に留意する。以下は本ラウンド（2026-09-17 00:xx 時点）の記述をそのまま残す。
+**非後退・短縮を確認（2026-09-17 追記）**。v1 exact hit（test ジョブ合計 7m41s、n=11 中央値）に対し v3 exact hit（§2-1、run `35170879552`）は **4m58s**（−2m43s、約 35% 短縮）。blob は 3165 MB → 100 MB、復元は 66.7秒 → 4秒。内訳を同じ計測区間（ジョブのステップ時間。`gh api repos/Fandhe-AI/fandhe-ai/actions/jobs/<id>` の `steps[]`）で比較すると、v1 代表 run [`35103799823`](https://github.com/Fandhe-AI/fandhe-ai/actions/runs/35103799823) / job `104819663547` は `Restore cargo cache` 1m10s・`cargo test --workspace --all-features` 6m22s、v3 exact hit は同 4秒・4m31s（＋prune 12秒）であり、復元・`cargo test` ステップの両方が短縮している。§2-1 v1 行の「コンパイル 2m31s」は `cache-breakdown-2026-09-17.md` §4 のコンパイルのみの値でステップ全体（テスト実行込み）ではないため、v3 の 4m31s と直接比較しない。`cargo test` ステップ短縮の原因（prune 後の deps 再解決・incremental 抑止の影響等）は本ドキュメントでは推定せず観測のみを記録する（判定は計画どおり test ジョブ合計で行う）。v3 の exact hit サンプルは 1 件（n=1）であり、v1 の n=11 中央値との比較である点に留意する。以下は本ラウンド（2026-09-17 00:xx 時点）の記述をそのまま残す。
 
 （当初記述）**保留（未達ではなく、v3 の実測データが未取得のため判定不能）**。
 
