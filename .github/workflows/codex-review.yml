@@ -67,22 +67,25 @@ on:
       codex-version:
         description: >-
           @openai/codex の固定バージョン（サプライチェーン対策のため latest 不可）。
-          `model` 既定の GPT-6 Astra（`gpt-6-astra`）は 0.153.1 以降でのみ利用可
+          `model` に GPT-6 Astra（`gpt-6-astra`）を指定する場合は 0.153.1 以降が必要
         type: string
         required: false
         default: "0.153.4"
       model:
         description: >-
           codex exec に渡すモデル slug（`--config model=` で明示固定。CLI 既定モデルの
-          変更に引きずられないため）。空文字は不可
+          変更に引きずられないため）。既定 gpt-5.6-sol（GPT-6 Astra は 1 レビューあたりの
+          ChatGPT Pro 共有 quota 消費が大きいため 2026-09-21 に戻した。深いレビューが
+          要るリポジトリは wrapper の with: で gpt-6-astra を明示）。空文字は不可
         type: string
         required: false
-        default: gpt-6-astra
+        default: gpt-5.6-sol
       reasoning-effort:
         description: >-
           model_reasoning_effort（low / medium / high / xhigh / max / ultra）。
-          既定 low（gpt-6-astra のサーバー既定 medium だと ChatGPT Pro の共有 quota が
-          上限に達したため）。空ならモデルのサーバー既定に従う
+          既定 low（gpt-6-astra 時代にサーバー既定 medium で ChatGPT Pro の共有 quota が
+          上限に達したため。gpt-5.6-sol のサーバー既定も low だが、モデル差し替えで
+          黙って変わらないよう明示固定）。空ならモデルのサーバー既定に従う
         type: string
         required: false
         default: low
@@ -548,8 +551,9 @@ jobs:
           CODEX_REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         run: |
           # モデルは input で明示固定する（CLI のバンドル既定モデルはバージョンごとに
-          # 変わる。0.153.4 で GPT-6 Astra が既定化されたが、既定に依存すると
-          # codex-version の更新だけでレビュー品質・所要時間・quota 消費が黙って変わる）。
+          # 変わる。0.153.4 で GPT-6 Astra が CLI 既定化されたが、既定に依存すると
+          # codex-version の更新だけでレビュー品質・所要時間・quota 消費が黙って変わる。
+          # 本 workflow の既定は quota 抑制のため gpt-5.6-sol）。
           # slug は TOML 文字列として渡すため、英数字と . _ - 以外を含む値（引用符・
           # 改行・空）は fail-closed で拒否する
           case "${CODEX_MODEL}" in
