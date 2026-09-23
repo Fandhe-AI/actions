@@ -11,7 +11,7 @@
 //   置き換える（fail-closed）。合成結果の summary には固定文の理由だけを書き、モデル出力の
 //   断片は載せない（未検証の出力を PR コメントへ流さない）
 // - findings の未知フィールド・トップレベルの未知フィールドは落とす（後段が使わない
-//   値を PR コメント・ジョブ出力へ持ち込まない）
+//   値を PR コメント・artifact へ持ち込まない）
 //
 // 本スクリプトは PR が改変できない信頼済み参照（呼び出された workflow と同一 SHA の
 // Fandhe-AI/actions checkout）から実行される。
@@ -176,8 +176,8 @@ const result = {
   findings,
   resolved_threads: resolvedThreads,
 };
-// ジョブ出力（1 ジョブあたり合計 1 MB 上限）に収めるため、全体が大きすぎる場合は
-// detail を短く切り詰める（finding 自体・priority は残すので gate 判定は変わらない）
+// PR への投稿量（本文上限ごとに分割される続きコメントの件数）を抑えるため、全体が大きすぎる
+// 場合は detail を短く切り詰める（finding 自体・priority は残すので gate 判定は変わらない）
 const OUTPUT_BUDGET = 700000;
 if (JSON.stringify(result).length > OUTPUT_BUDGET) {
   console.error('::warning::レビュー結果が大きすぎるため、各 finding の detail を切り詰めます');

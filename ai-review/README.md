@@ -41,6 +41,10 @@ API を呼ばず fail-closed で未完了扱いにする（部分レビューを
 / `findings` / `resolved_threads`）を検証し、適合しない出力は「未完了」の合成結果へ置き換える
 （モデル出力の断片を未検証のまま PR コメントへ流さない）。
 
+**結果の受け渡しと投稿量**: 正規化済み結果は資格情報スキャン後に artifact（保持 1 日）で
+`post_feedback` へ渡す。総括・行を特定できない指摘の一覧は GitHub の本文上限（65,536 文字）
+に収まるよう分割し、2 件目以降は issue コメント（`（続き）`）として投稿する。
+
 **インライン指摘の自動 resolve**: 投稿する各 finding には reviewer-id ごとのマーカー
 `<!-- ai-review-finding reviewer=<id> -->` を付ける。新しいレビュー投稿の前後で:
 
@@ -185,7 +189,7 @@ status check には個別ジョブ、またはテンプレート同梱の集約 
 required にする運用のどちらかを選ぶ。
 
 - 各ジョブの outputs: `reviewed`（レビューが実行され結果が出たか）、`skip-reason`、
-  `blocking-count`、`result`
+  `blocking-count`、`result-artifact`
 - `ai-review-gate` は `MIN_REVIEWERS`（既定 1）未満しかレビューが実行されなかった場合に
   失敗する（資格情報の設定漏れで全 reviewer が skip されたまま green になる fail-open を
   防ぐ）。fork PR を
@@ -229,7 +233,7 @@ required にする運用のどちらかを選ぶ。
 
 | 名前 | 説明 |
 |---|---|
-| `result` | 正規化済みのレビュー結果 JSON（skip 時は空） |
+| `result-artifact` | 正規化済みのレビュー結果 JSON（`ai-review.json`）を格納した同一 run 内の artifact 名（skip 時・結果未生成時は空。保持期間 1 日。`actions/download-artifact` で取得する）。結果本体は job output ではなく artifact で受け渡す（大きな結果の上限超過や、登録 secret と一致する部分文字列を含む output を Actions が黙って落とす挙動を避けるため） |
 | `blocking-count` | ブロック対象 priority の指摘件数（gate 未到達・skip 時は空） |
 | `reviewer-id` | 解決済みの reviewer-id |
 | `reviewed` | レビューが実行され結果が出たか（`"true"` / `"false"`） |
