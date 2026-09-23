@@ -18,7 +18,7 @@ provider は 2 方式に分かれる。
 | `claude` | agentic | CLI 2.1.280 | `claude -p --restricted --safe-mode --tools Read,Grep,Glob --permission-mode dontAsk` | `--json-schema` | `claude`（用途ラベル） | `claude-sonnet-5` | home-dir（`CLAUDE_CONFIG_DIR`、変数 `CLAUDE_HOME_DIR`）または API_KEY（Anthropic API キー → `ANTHROPIC_API_KEY`、`claude setup-token` の OAuth トークン `sk-ant-oat…` → `CLAUDE_CODE_OAUTH_TOKEN`） |
 | `gemini` | agentic | CLI 0.60.0 | `gemini -p -o json --approval-mode plan --admin-policy`（読み取り系ツール以外を全拒否。Web 検索・取得も拒否） | 非対応。指示文 + `normalize-output.mjs` で検証 | `gemini`（用途ラベル） | CLI 既定（自動ルーティング） | home-dir（`GEMINI_CLI_HOME`、変数 `GEMINI_HOME_DIR`）または API_KEY（`GEMINI_API_KEY`） |
 | `grok` | api | xAI API（OpenAI 互換 `https://api.x.ai/v1`） | ツール自体を渡さない | `response_format: json_schema`（strict） | private: self-hosted / public: `ubuntu-latest` | 必須（`model` 入力） | API_KEY 必須（xAI API キー） |
-| `openai-compatible` | api | vLLM / SGLang 等の local LLM、Gemini の OpenAI 互換 endpoint 等 | ツール自体を渡さない | `api-response-format`（json_schema/json_object/none） | private: self-hosted / public: `ubuntu-latest` | 必須（`model` 入力） | `api-base-url` + `model` 必須、API_KEY 任意 |
+| `openai-compatible` | api | vLLM / SGLang 等の local LLM、Gemini の OpenAI 互換 endpoint 等 | ツール自体を渡さない | `api-response-format`（json_schema/json_object/none） | private: self-hosted / public: `ubuntu-latest` | 必須（`model` 入力） | `api-base-url`（Actions variable `AI_REVIEW_API_BASE_URLS` の許可リストと完全一致）+ `model` 必須、API_KEY 任意 |
 
 `gemini` は `reasoning-effort` 非対応。`openai-compatible` は `max-diff-bytes` 超過時に
 API を呼ばず fail-closed で未完了扱いにする（部分レビューを完了扱いにしない）。
@@ -108,7 +108,19 @@ API を呼ばず fail-closed で未完了扱いにする（部分レビューを
 
    # API キー方式
    gh secret set XAI_API_KEY --repo Fandhe-AI/<repo> --body "<xai api key>"
+
+   # openai-compatible（local LLM）: 送信先 URL と、その許可リスト（完全一致・カンマ区切り）
+   gh variable set LOCAL_LLM_BASE_URL --repo Fandhe-AI/<repo> --body http://<llm-node>:8000/v1
+   gh variable set AI_REVIEW_API_BASE_URLS --repo Fandhe-AI/<repo> --body http://<llm-node>:8000/v1
    ```
+
+   **資格情報・送信先は Actions variable / secret からのみ解決する**。`home-dir` は
+   `*_HOME_DIR` 変数だけから読み（input では受け取らない）、grok の送信先は
+   `https://api.x.ai/v1` 固定、openai-compatible の `api-base-url` は許可リスト
+   `AI_REVIEW_API_BASE_URLS` との完全一致を必須とする（PR が書き換えられる wrapper の input
+   だけで API キー・差分の送信先や CLI の設定ディレクトリが変わらないようにする多層防御）。
+   なお wrapper を書き換えられる主体は run ステップの追加等で secret を直接扱えるため、
+   `pull_request` で secret を使う workflow 一般の残留リスクは残る
 
 4. **テンプレートをコピーする**:
 
@@ -198,8 +210,7 @@ required にする運用のどちらかを選ぶ。
 | `reasoning-effort` | - | （空。codex のみ `low` を既定適用） | 推論量。codex: `low`〜`ultra` / claude: `low`〜`max` / API provider: `minimal`〜`max`（`reasoning_effort` として送信）。`"default"` でモデル既定に従う。gemini は非対応 |
 | `cli-version` | - | （空。codex: `0.153.4` / claude: `2.1.280` / gemini: `0.60.0`） | agentic provider の CLI 固定バージョン（`latest` 不可） |
 | `auth` | - | `auto` | 認証方式。`auto` / `home-dir` / `api-key` |
-| `home-dir` | - | （空） | agentic provider のログイン済みディレクトリ（runner 上の絶対パス）。空なら Actions variable `*_HOME_DIR` を使う |
-| `api-base-url` | - | （空。grok 既定 `https://api.x.ai/v1`） | API provider の OpenAI 互換 base URL |
+| `api-base-url` | - | （空） | openai-compatible の OpenAI 互換 base URL。Actions variable `AI_REVIEW_API_BASE_URLS`（カンマ区切りの許可リスト）のいずれかと完全一致が必要（不一致は失敗、許可リスト未設定・空は skip）。grok は `https://api.x.ai/v1` 固定で指定不可 |
 | `api-response-format` | - | `json_schema` | `json_schema` / `json_object` / `none` |
 | `max-diff-bytes` | - | `300000` | API provider で prompt に埋め込む差分の上限バイト数。超過時は未完了扱い |
 | `diff-context-lines` | - | `10` | レビュー入力の差分の文脈行数 |
@@ -297,4 +308,6 @@ PR を先にレビュー・マージしてから、別 PR で導入する。
 | API provider で `404 model not found` | `model` の指定ミス、またはサーバーにモデル未登録 | Actions variable の `model` 値とサーバー側の登録名を確認する |
 | API provider で schema エラー | サーバーが `json_schema` strict に未対応 | `api-response-format` を `json_object` / `none` へ下げる |
 | `review_completed: false`（差分超過） | `max-diff-bytes` 超過（API provider） | `max-diff-bytes` を引き上げる、または PR を分割する |
+| preflight が「api-base-url が … 許可リストに含まれていません」で失敗する | `api-base-url` が Actions variable `AI_REVIEW_API_BASE_URLS` のどの値とも完全一致しない（末尾 `/` の有無も区別する） | 許可リストへ同じ文字列を登録する |
+| review ジョブが「home-dir が PR の作業ディレクトリまたはジョブ一時領域の内側を指しています」で失敗する | `*_HOME_DIR` 変数が `$GITHUB_WORKSPACE` / `$RUNNER_TEMP` 配下（symlink 解決後）を指している | runner のマウント先（例 `/opt/codex-home`）へ変更する |
 | `Not logged in`（agentic provider） | home-dir の認証切れ | `docs/self-hosted-runner.md` の該当 provider の再ログイン手順を実施する |

@@ -87,8 +87,9 @@ jobs:
       provider: openai-compatible
       reviewer-id: local-llm
       reviewer-name: Local LLM
-      # 有効化: Actions variable LOCAL_LLM_BASE_URL（例 http://llm-node:8000/v1）と
-      # LOCAL_LLM_MODEL（サーバーに登録されたモデル名）
+      # 有効化: Actions variable LOCAL_LLM_BASE_URL（例 http://llm-node:8000/v1）・
+      # LOCAL_LLM_MODEL（サーバーに登録されたモデル名）に加え、送信先の許可リスト
+      # AI_REVIEW_API_BASE_URLS（LOCAL_LLM_BASE_URL と同じ値。複数ならカンマ区切り）
       api-base-url: ${{ vars.LOCAL_LLM_BASE_URL }}
       model: ${{ vars.LOCAL_LLM_MODEL }}
       # LLM サーバーへ到達できる LAN 内の runner（private リポジトリの既定は self-hosted）

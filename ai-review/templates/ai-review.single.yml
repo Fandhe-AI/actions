@@ -89,7 +89,9 @@ jobs:
   #     provider: openai-compatible
   #     reviewer-id: local-llm
   #     reviewer-name: Local LLM
-  #     api-base-url: ${{ vars.LOCAL_LLM_BASE_URL }}  # 例 http://llm-node:8000/v1（未設定の間は skip）
+  #     # 例 http://llm-node:8000/v1。Actions variable AI_REVIEW_API_BASE_URLS（送信先の
+  #     # 許可リスト。同じ値を登録）と完全一致が必要。どちらかが未設定の間は skip
+  #     api-base-url: ${{ vars.LOCAL_LLM_BASE_URL }}
   #     model: ${{ vars.LOCAL_LLM_MODEL }}
   #     runner: self-hosted              # LLM サーバーへ到達できる LAN 内の runner
   #     max-diff-bytes: 600000           # モデルのコンテキスト長に合わせる

@@ -29,12 +29,19 @@ name: AI PR review (reusable)
 #
 # 認証（provider ごとに 2 方式。`auth` input で選択、既定 auto）:
 # - home-dir: self-hosted runner 上のログイン済みディレクトリ（codex: CODEX_HOME /
-#   claude: CLAUDE_CONFIG_DIR / gemini: GEMINI_CLI_HOME）。パスは `home-dir` input、
-#   または Actions variable `CODEX_HOME_DIR` / `CLAUDE_HOME_DIR` / `GEMINI_HOME_DIR`
-#   （サブスクリプション枠で動作）
+#   claude: CLAUDE_CONFIG_DIR / gemini: GEMINI_CLI_HOME）。パスは Actions variable
+#   `CODEX_HOME_DIR` / `CLAUDE_HOME_DIR` / `GEMINI_HOME_DIR` だけから解決する（PR が
+#   書き換えられる wrapper の input からは受け取らない。サブスクリプション枠で動作）
 # - api-key: 呼び出し側が `secrets: API_KEY:` で渡す API キー（従量課金）
 # いずれの資格情報も未設定の間はレビュージョブを skip する（fail-closed な有効化スイッチ。
 # 設定が唯一の有効化操作）。fork からの PR では全ジョブを実行しない。
+#
+# 資格情報・ファイルシステム・ネットワークに届く値（home-dir・API の送信先）は、PR が
+# 書き換えられる呼び出し側 wrapper の input だけでは決めない（home-dir は Actions variable
+# のみ、grok の送信先は固定、openai-compatible の送信先は Actions variable
+# AI_REVIEW_API_BASE_URLS の許可リストとの完全一致を必須とする）。なお wrapper を書き換え
+# られる主体は run ステップの追加等で secret を直接扱えるため、これは PR 由来の値で
+# 資格情報の送信先が静かに変わる経路を塞ぐ多層防御であり、その主体に対する境界ではない。
 #
 # 以下の多層防御は codex-review.yml（Fandhe-AI/fandhe-backend PR #520/#521/#526 で構築・
 # 実証）から引き継ぐ。詳細な根拠は各ステップのコメント:
@@ -112,24 +119,18 @@ on:
         default: ""
       auth:
         description: >-
-          認証方式。auto（home-dir が設定されていれば home-dir、無ければ secret API_KEY）/
-          home-dir / api-key。いずれの資格情報も無い場合はレビュージョブを skip する
+          認証方式。auto（Actions variable CODEX_HOME_DIR / CLAUDE_HOME_DIR / GEMINI_HOME_DIR
+          が設定されていれば home-dir、無ければ secret API_KEY）/ home-dir / api-key。
+          いずれの資格情報も無い場合はレビュージョブを skip する
         type: string
         required: false
         default: auto
-      home-dir:
-        description: >-
-          agentic provider のログイン済みディレクトリ（runner 上の絶対パス）。空なら
-          Actions variable CODEX_HOME_DIR / CLAUDE_HOME_DIR / GEMINI_HOME_DIR を使う
-        type: string
-        required: false
-        default: ""
       api-base-url:
         description: >-
-          API provider の OpenAI 互換 base URL（/chat/completions の手前まで。例
-          http://llm-node:8000/v1）。grok の既定は https://api.x.ai/v1。
-          openai-compatible で空の場合はレビュージョブを skip する（有効化スイッチとして
-          Actions variable を渡す運用を推奨）
+          openai-compatible provider の OpenAI 互換 base URL（/chat/completions の手前まで。
+          例 http://llm-node:8000/v1）。Actions variable AI_REVIEW_API_BASE_URLS（カンマ区切りの
+          許可リスト）のいずれかと完全一致する必要がある（不一致は失敗、許可リスト未設定・
+          本 input が空はレビュージョブを skip）。grok は https://api.x.ai/v1 固定で指定不可
         type: string
         required: false
         default: ""
@@ -241,12 +242,12 @@ jobs:
           EFFORT: ${{ inputs.reasoning-effort }}
           CLI_VERSION: ${{ inputs.cli-version }}
           AUTH: ${{ inputs.auth }}
-          HOME_DIR: ${{ inputs.home-dir }}
           API_BASE_URL: ${{ inputs.api-base-url }}
           API_RESPONSE_FORMAT: ${{ inputs.api-response-format }}
           VAR_CODEX_HOME_DIR: ${{ vars.CODEX_HOME_DIR }}
           VAR_CLAUDE_HOME_DIR: ${{ vars.CLAUDE_HOME_DIR }}
           VAR_GEMINI_HOME_DIR: ${{ vars.GEMINI_HOME_DIR }}
+          VAR_API_BASE_URLS: ${{ vars.AI_REVIEW_API_BASE_URLS }}
           # secret の値は渡さず、設定の有無だけを渡す
           HAS_API_KEY: ${{ secrets.API_KEY != '' }}
         run: |
@@ -363,7 +364,9 @@ jobs:
               claude) var_home="${VAR_CLAUDE_HOME_DIR}" ;;
               gemini) var_home="${VAR_GEMINI_HOME_DIR}" ;;
             esac
-            candidate="${HOME_DIR:-${var_home}}"
+            # home-dir は Actions variable のみから解決する（PR が書き換えられる input で
+            # CLI の設定ディレクトリを PR checkout 内等へ向けさせない）
+            candidate="${var_home}"
             case "${AUTH}" in
               auto)
                 if [ -n "${candidate}" ]; then auth_mode=home-dir
@@ -374,33 +377,60 @@ jobs:
             esac
             if [ "${auth_mode}" = home-dir ]; then
               if ! [[ "${candidate}" =~ ${path_re} ]] || [[ "/${candidate}/" == */../* ]] || [[ "/${candidate}/" == */./* ]]; then
-                fail "home-dir（または対応する Actions variable）は . .. を含まない絶対パスで指定してください（値は表示しません）"
+                fail "Actions variable ${PROVIDER^^}_HOME_DIR は . .. を含まない絶対パスで指定してください（値は表示しません）"
               fi
               home_dir="${candidate}"
             fi
             if [ "${auth_mode}" = none ]; then
-              not_ready "資格情報（home-dir / Actions variable ${PROVIDER^^}_HOME_DIR / secret API_KEY）が未設定のため、${PROVIDER} レビューを skip します"
+              not_ready "資格情報（Actions variable ${PROVIDER^^}_HOME_DIR / secret API_KEY）が未設定のため、${PROVIDER} レビューを skip します"
             fi
           else
             if [ "${AUTH}" = home-dir ]; then
               fail "grok / openai-compatible provider は auth: home-dir に対応していません"
             fi
-            base_url="${API_BASE_URL}"
-            if [ -z "${base_url}" ] && [ "${PROVIDER}" = grok ]; then
+            # 送信先（API キーと PR 差分が届く先）は PR が書き換えられる input だけでは決めない。
+            # grok は固定、openai-compatible は Actions variable の許可リストと完全一致を必須と
+            # する（前方一致は別ホスト・別パスへの迂回を許すため使わない）
+            if [ "${PROVIDER}" = grok ]; then
+              if [ -n "${API_BASE_URL}" ]; then
+                fail "grok provider では api-base-url を指定できません（https://api.x.ai/v1 固定）"
+              fi
               base_url=https://api.x.ai/v1
+            else
+              base_url="${API_BASE_URL}"
+              if [ -z "${base_url}" ]; then
+                not_ready "api-base-url が未設定のため、openai-compatible レビューを skip します"
+              fi
+              # userinfo（@）・クエリ・フラグメントを含む URL を拒否する（資格情報の URL 埋め込み・
+              # 取り違えによる送信先の偽装を防ぐ）
+              url_re='^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'
+              [[ "${base_url}" =~ ${url_re} ]] || fail "api-base-url は http(s)://host[:port][/path] 形式で指定してください（userinfo・クエリ不可。値は表示しません）"
+              allowed_urls=()
+              while IFS= read -r u; do
+                u="${u#"${u%%[![:space:]]*}"}"
+                u="${u%"${u##*[![:space:]]}"}"
+                if [ -n "${u}" ]; then
+                  allowed_urls+=("${u}")
+                fi
+              done < <(printf '%s\n' "${VAR_API_BASE_URLS}" | tr ',' '\n')
+              if [ "${#allowed_urls[@]}" -eq 0 ]; then
+                not_ready "Actions variable AI_REVIEW_API_BASE_URLS（送信先の許可リスト）が未設定のため、openai-compatible レビューを skip します"
+              fi
+              listed=false
+              for u in "${allowed_urls[@]}"; do
+                if [ "${u}" = "${base_url}" ]; then
+                  listed=true
+                  break
+                fi
+              done
+              if [ "${listed}" != true ]; then
+                fail "api-base-url が Actions variable AI_REVIEW_API_BASE_URLS の許可リストに含まれていません（完全一致が必要。値は表示しません）"
+              fi
             fi
-            if [ -z "${base_url}" ]; then
-              not_ready "api-base-url が未設定のため、openai-compatible レビューを skip します"
-            fi
-            # userinfo（@）・クエリ・フラグメントを含む URL を拒否する（資格情報の URL 埋め込み・
-            # 取り違えによる送信先の偽装を防ぐ）
-            url_re='^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'
-            [[ "${base_url}" =~ ${url_re} ]] || fail "api-base-url は http(s)://host[:port][/path] 形式で指定してください（userinfo・クエリ不可。値は表示しません）"
             if [ "${HAS_API_KEY}" = true ] && [ "${AUTH}" != home-dir ]; then
               auth_mode=api-key
             fi
             if [ "${PROVIDER}" = grok ]; then
-              [[ "${base_url}" == https://* ]] || fail "grok provider の api-base-url は https のみ許可します"
               if [ "${auth_mode}" != api-key ]; then
                 not_ready "secret API_KEY（xAI API キー）が未設定のため、grok レビューを skip します"
               fi
@@ -905,6 +935,18 @@ jobs:
               echo "::error::home-dir（ログイン済みディレクトリ）が runner 上に存在しません（runner のマウント設定を確認してください）"
               exit 1
             fi
+            # PR checkout・ジョブ一時領域の内側（PR が内容を用意できる場所）を CLI の設定
+            # ディレクトリにしない。symlink を解決した実パスで判定する
+            real_home="$(cd "${auth_home}" && pwd -P)"
+            for untrusted_root in "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}"; do
+              real_root="$(cd "${untrusted_root}" && pwd -P)"
+              case "${real_home}/" in
+                "${real_root}"/*)
+                  echo "::error::home-dir が PR の作業ディレクトリまたはジョブ一時領域の内側を指しています。レビューを中止します"
+                  exit 1
+                  ;;
+              esac
+            done
           else
             auth_home="${ephemeral_home}"
           fi

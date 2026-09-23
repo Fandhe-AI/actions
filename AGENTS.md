@@ -113,7 +113,9 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
   （prompt/schema/AGENTS.md 等の base 版への揃え、GEMINI.md の全削除、各 CLI 設定
   ディレクトリ・`.env` の除去）、claude の `--restricted --safe-mode`、gemini の
   `--admin-policy`（読み取り系以外の全拒否）とそれを無効化するシステムポリシーの
-  fail-closed 検証、API モードの nonce 区切り（プロンプト
+  fail-closed 検証、home-dir・API 送信先を PR が書き換えられる input だけで決めない解決
+  （home-dir は Actions variable のみ、grok 送信先は固定、openai-compatible 送信先は
+  許可リスト完全一致）、API モードの nonce 区切り（プロンプト
   インジェクション対策）、`normalize-output.mjs` による出力契約の検証
 - **受容済み残留リスク: レビュー skip のブランチ接頭辞判定**: codex-review の
   `skip-branch-prefixes`（旧 `skip-sync-pr-review`）が head branch 名の接頭辞のみで

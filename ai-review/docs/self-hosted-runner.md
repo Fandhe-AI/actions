@@ -114,7 +114,9 @@ curl -s http://<llm-node>:8000/v1/models
 ```
 
 Actions variable `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_MODEL` を設定する（テンプレート
-`ai-review.single.yml` / `ai-review.multi.yml` の `local-llm` ジョブが参照する）。
+`ai-review.single.yml` / `ai-review.multi.yml` の `local-llm` ジョブが参照する）。加えて
+送信先の許可リスト `AI_REVIEW_API_BASE_URLS` に同じ URL を登録する（`api-base-url` との
+完全一致が必要。未設定の間は skip、不一致は失敗。複数の LLM サーバーを使う場合はカンマ区切り）。
 
 **モデル選定の目安**: コンテキスト長が長いものを推奨する（例: deepseek-v4-flash 系
 384K、qwen3.6-35b-a3b 系 262K、minimax-m2.7 系 196K）。`max-diff-bytes` はコンテキスト長の
