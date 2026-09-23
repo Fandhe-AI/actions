@@ -188,14 +188,33 @@ const result = {
   resolved_threads: resolvedThreads,
 };
 // PR への投稿量（本文上限ごとに分割される続きコメントの件数）を抑えるため、全体が大きすぎる
-// 場合は detail を短く切り詰める（finding 自体・priority は残すので gate 判定は変わらない）
+// 場合は表示用の文字列を短く切り詰める（finding 自体・priority・アンカー用の path / line は
+// 残すので gate 判定は変わらない）。切り詰め後も予算を超える場合は、指摘を欠落させた
+// 完了扱いにしないよう未完了の固定サイズ結果へ置き換える（fail-closed）
 const OUTPUT_BUDGET = 700000;
+const shorten = (s, max) => (s.length > max ? `${s.slice(0, max)}…（以下省略）` : s);
 if (JSON.stringify(result).length > OUTPUT_BUDGET) {
-  console.error('::warning::レビュー結果が大きすぎるため、各 finding の detail を切り詰めます');
+  console.error('::warning::レビュー結果が大きすぎるため、各 finding の表示用文字列を切り詰めます');
   for (const f of findings) {
-    if (f.detail.length > 1500) f.detail = `${f.detail.slice(0, 1500)}…（以下省略）`;
+    f.title = shorten(f.title, 300);
+    f.location = shorten(f.location, 300);
+    f.detail = shorten(f.detail, 1500);
   }
-  if (result.summary.length > 4000) result.summary = `${result.summary.slice(0, 4000)}…（以下省略）`;
+  result.summary = shorten(result.summary, 4000);
+}
+if (JSON.stringify(result).length > OUTPUT_BUDGET) {
+  const overflow = {
+    summary:
+      `AI レビューの結果が切り詰め後も処理上限（${OUTPUT_BUDGET} 文字）を超えました。` +
+      '一部の指摘だけを完了扱いで投稿すると指摘が欠落するため、レビュー未完了として扱います' +
+      '（fail-closed）。PR を分割してください。',
+    review_completed: false,
+    findings: [],
+    resolved_threads: [],
+  };
+  writeFileSync(outPath, JSON.stringify(overflow));
+  console.error('::warning::レビュー結果が切り詰め後も上限を超えたため、未完了結果へ置き換えました');
+  process.exit(0);
 }
 writeFileSync(outPath, JSON.stringify(result));
 console.log(

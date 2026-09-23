@@ -1475,6 +1475,10 @@ jobs:
               core.warning(`resolved_threads のうち ${droppedCandidates} 件は、本 PR の未解決スレッドに一致しない・または収集後に返信が追加されたため resolve しません`);
             }
 
+            // レビュー本体の作成と続きコメントの投稿はエラー処理を分ける（続きコメントの失敗で
+            // 投稿済みのレビューをフォールバックで重複投稿しない）
+            let reviewPosted = false;
+            let postIncomplete = false;
             try {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
@@ -1485,7 +1489,7 @@ jobs:
                 body,
                 comments: inline,
               });
-              for (const b of continuationBodies) await postPlainComment(b);
+              reviewPosted = true;
             } catch (e) {
               core.warning(`pulls.createReview が失敗したため issue コメントへフォールバックします: ${e.message}`);
               const fallbackSection = result.review_completed === true
@@ -1496,6 +1500,16 @@ jobs:
                 await postPlainComment(b);
               }
             }
+            if (reviewPosted) {
+              for (let i = 0; i < continuationBodies.length; i += 1) {
+                try {
+                  await postPlainComment(continuationBodies[i]);
+                } catch (e) {
+                  postIncomplete = true;
+                  core.warning(`続きコメント ${i + 1}/${continuationBodies.length} の投稿に失敗しました: ${e.message}`);
+                }
+              }
+            }
 
             // 投稿後に旧スレッドを resolve する。並行実行対策として、resolve 直前に PR の
             // 現在の head を再取得し、この実行がレビューした head が最新の場合のみ行う
@@ -1503,6 +1517,12 @@ jobs:
               ...staleThreadIds.map(id => ({ id, kind: `旧 ${reviewerName} スレッド`, addressed: false })),
               ...addressedThreadIds.map(id => ({ id, kind: '対応済み判定スレッド', addressed: true })),
             ];
+            // 今回の指摘を全件投稿できていない場合は旧スレッドを閉じない（未投稿の指摘が旧
+            // スレッドにしか残っていない可能性があるため）
+            if (postIncomplete && toResolve.length > 0) {
+              core.warning('続きコメントの一部を投稿できなかったため、スレッドの自動 resolve をスキップします');
+              toResolve.length = 0;
+            }
             if (toResolve.length > 0) {
               try {
                 const { data: pr } = await github.rest.pulls.get({
@@ -1575,4 +1595,7 @@ jobs:
             }
             if (toResolve.length > 0) {
               core.info(`レビュースレッドを ${resolved}/${toResolve.length} 件 resolve しました（旧 ${reviewerName}: ${staleThreadIds.length} / 対応済み判定: ${addressedThreadIds.length}）`);
+            }
+            if (postIncomplete) {
+              core.setFailed(`レビュー結果の一部（続きコメント）を投稿できませんでした。全文はワークフロー実行の artifact \`${artifactName}\` を参照してください`);
             }
