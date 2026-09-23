@@ -1,0 +1,194 @@
+# ai-review wrapper テンプレート（複数モデルでの同時レビュー）。
+# 呼び出し側リポジトリの .github/workflows/ai-review.yml へコピーして使う。
+# 導入手順は Fandhe-AI/actions の ai-review/README.md「複数モデルでの同時レビュー」を参照。
+#
+# 同じ PR を複数の AI（codex / claude / gemini / grok / local LLM）が並列にレビューし、
+# それぞれが別の PR レビューとして投稿する（見出し・インライン指摘に reviewer 名が付く）。
+# モデルごとの見落としを相互に補うのが目的。各 reviewer は reviewer-id ごとの識別マーカーで
+# 自分の旧指摘だけを自動 resolve するため、互いの指摘を閉じ合わない。
+#
+# 各ジョブは資格情報（Actions variable / secret）が未設定の間は skip されるので、
+# 使わない reviewer のジョブは残したままでも害はない（不要なら削除してよい）。
+# レート枠・API 課金は reviewer の数だけ消費される点に注意。
+name: AI PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# reusable workflow のトップレベル concurrency は機能しないため呼び出し側で設定する
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --- agentic reviewer（CLI が PR head のファイルを読み取りツールで参照する） ---
+  # runner は既定で provider と同名の用途ラベル（codex / claude / gemini）。
+  # sudo を持たない self-hosted runner が必須（ai-review/docs/self-hosted-runner.md）
+
+  codex:
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      provider: codex
+      # 有効化: Actions variable CODEX_HOME_DIR（ChatGPT ログイン済み CODEX_HOME）
+
+  claude:
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      provider: claude
+      # 有効化: Actions variable CLAUDE_HOME_DIR（ログイン済み CLAUDE_CONFIG_DIR）
+      #         または secret（下記）
+    secrets:
+      # Anthropic API キー、または `claude setup-token` の OAuth トークン（sk-ant-oat…）
+      API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  gemini:
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      provider: gemini
+      # 有効化: Actions variable GEMINI_HOME_DIR（ログイン済み GEMINI_CLI_HOME）
+      #         または secret（下記）
+    secrets:
+      API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # --- API reviewer（差分を prompt に埋め込んだ 1 リクエスト。ツールなし） ---
+
+  grok:
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      provider: grok
+      model: ${{ vars.GROK_MODEL }}
+    secrets:
+      # 未設定の間は skip。設定後は Actions variable GROK_MODEL も必須
+      API_KEY: ${{ secrets.XAI_API_KEY }}
+
+  local-llm:
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      provider: openai-compatible
+      reviewer-id: local-llm
+      reviewer-name: Local LLM
+      # 有効化: Actions variable LOCAL_LLM_BASE_URL（例 http://llm-node:8000/v1）と
+      # LOCAL_LLM_MODEL（サーバーに登録されたモデル名）
+      api-base-url: ${{ vars.LOCAL_LLM_BASE_URL }}
+      model: ${{ vars.LOCAL_LLM_MODEL }}
+      # LLM サーバーへ到達できる LAN 内の runner（private リポジトリの既定は self-hosted）
+      # runner: self-hosted
+      # モデルのコンテキスト長に合わせる（目安: 1 トークン ≒ 3〜4 バイト）
+      max-diff-bytes: 600000
+      # vLLM / SGLang は json_schema に対応。未対応サーバーでは json_object / none に下げる
+      # api-response-format: json_schema
+    # secrets:
+    #   API_KEY: ${{ secrets.LOCAL_LLM_API_KEY }}   # サーバーが認証を要求する場合のみ
+
+  # 同じ provider で複数モデルを並べる場合は reviewer-id を必ず分ける（例）:
+  # local-llm-deepseek:
+  #   uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+  #   permissions:
+  #     contents: read
+  #     pull-requests: write
+  #   with:
+  #     provider: openai-compatible
+  #     reviewer-id: local-deepseek
+  #     reviewer-name: DeepSeek (local)
+  #     api-base-url: ${{ vars.LOCAL_LLM_BASE_URL }}
+  #     model: deepseek-v4-flash
+
+  # 集約 gate: required status check をこの 1 本にまとめるためのジョブ（fail-closed）。
+  # - いずれかの reviewer ジョブが success / skipped 以外（ブロック対象の指摘・レビュー未完了・
+  #   実行エラー）なら失敗する
+  # - 実際にレビューした reviewer（outputs.reviewed == true）が MIN_REVIEWERS 未満なら失敗する
+  #   （資格情報の設定漏れで全 reviewer が skip したまま green になる fail-open を防ぐ）。
+  #   ただし skip-branch-prefixes に一致して意図的に skip した PR は通す
+  # needs と env の列挙は上の reviewer ジョブと揃えること。
+  ai-review-gate:
+    if: always()
+    needs: [codex, claude, gemini, grok, local-llm]
+    runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Aggregate reviewer results
+        shell: bash
+        env:
+          # fork からの PR は全 reviewer が起動しない。fork PR を受け付ける public
+          # リポジトリで本ジョブを required にする場合は 0 にし、fork PR の扱いを
+          # branch protection 側で設計すること
+          MIN_REVIEWERS: "1"
+          R_CODEX: ${{ needs.codex.result }}
+          R_CLAUDE: ${{ needs.claude.result }}
+          R_GEMINI: ${{ needs.gemini.result }}
+          R_GROK: ${{ needs.grok.result }}
+          R_LOCAL_LLM: ${{ needs.local-llm.result }}
+          D_CODEX: ${{ needs.codex.outputs.reviewed }}
+          D_CLAUDE: ${{ needs.claude.outputs.reviewed }}
+          D_GEMINI: ${{ needs.gemini.outputs.reviewed }}
+          D_GROK: ${{ needs.grok.outputs.reviewed }}
+          D_LOCAL_LLM: ${{ needs.local-llm.outputs.reviewed }}
+          S_CODEX: ${{ needs.codex.outputs.skip-reason }}
+          S_CLAUDE: ${{ needs.claude.outputs.skip-reason }}
+          S_GEMINI: ${{ needs.gemini.outputs.skip-reason }}
+          S_GROK: ${{ needs.grok.outputs.skip-reason }}
+          S_LOCAL_LLM: ${{ needs.local-llm.outputs.skip-reason }}
+          B_CODEX: ${{ needs.codex.outputs.blocking-count }}
+          B_CLAUDE: ${{ needs.claude.outputs.blocking-count }}
+          B_GEMINI: ${{ needs.gemini.outputs.blocking-count }}
+          B_GROK: ${{ needs.grok.outputs.blocking-count }}
+          B_LOCAL_LLM: ${{ needs.local-llm.outputs.blocking-count }}
+        run: |
+          set -euo pipefail
+          failed=0
+          reviewed=0
+          prefix_skipped=0
+          {
+            echo "## AI レビュー集約"
+            echo
+            echo "| reviewer | ジョブ結果 | レビュー実行 | skip 理由 | ブロック対象の指摘 |"
+            echo "|---|---|---|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          for name in CODEX CLAUDE GEMINI GROK LOCAL_LLM; do
+            r_var="R_${name}"; d_var="D_${name}"; s_var="S_${name}"; b_var="B_${name}"
+            result="${!r_var}"
+            done_flag="${!d_var:-}"
+            reason="${!s_var:-}"
+            blocking="${!b_var:-}"
+            echo "| ${name,,} | ${result} | ${done_flag:-false} | ${reason:--} | ${blocking:--} |" >> "${GITHUB_STEP_SUMMARY}"
+            case "${result}" in
+              success|skipped) ;;
+              *) failed=$((failed + 1)) ;;
+            esac
+            if [ "${done_flag}" = true ]; then reviewed=$((reviewed + 1)); fi
+            if [ "${reason}" = branch-prefix ]; then prefix_skipped=$((prefix_skipped + 1)); fi
+          done
+          if [ "${failed}" -gt 0 ]; then
+            echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー。各ジョブと PR レビューを参照）"
+            exit 1
+          fi
+          if [ "${reviewed}" -eq 0 ] && [ "${prefix_skipped}" -gt 0 ]; then
+            echo "skip-branch-prefixes に一致したためレビュー対象外（集約 gate 通過）"
+            exit 0
+          fi
+          if [ "${reviewed}" -lt "${MIN_REVIEWERS}" ]; then
+            echo "::error::実際にレビューした reviewer が ${reviewed} 件で、MIN_REVIEWERS（${MIN_REVIEWERS}）に届きません（資格情報の設定漏れ・fork PR 等で全 reviewer が skip された）"
+            exit 1
+          fi
+          echo "集約 gate 通過（レビュー実行 ${reviewed} 件・失敗 0 件）"

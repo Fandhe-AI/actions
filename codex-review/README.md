@@ -1,5 +1,11 @@
 # codex-review
 
+> **凍結・後継 ai-review**: 本アクションは互換のため凍結しており、セキュリティ修正のみ
+> 行う。新規導入は [`ai-review`](../ai-review/README.md)（複数 AI provider・複数モデル
+> 同時レビュー対応）を使うこと。既存の wrapper（`codex-review.yml`）はそのまま動き続ける。
+> 移行手順は [`ai-review/README.md`「codex-review からの移行」](../ai-review/README.md#codex-review-からの移行)
+> を参照。
+
 OpenAI Codex CLI による PR 自動レビューの reusable workflow。PR の差分を Codex がレビューし、
 優先度付きの指摘（P0〜P3）を **PR レビュー（総括 + 該当行へのインラインコメント）**として
 投稿、ブロック対象 priority（`block-priorities` 入力でリポジトリごとに調整可能。既定 P0/P1）の
@@ -211,6 +217,9 @@ skip 指定を外す判断が要る。判定不能時にレビュー実行側へ
 受容範囲外である。
 
 ## runner 構築
+
+> 最新の手順は [`ai-review/docs/self-hosted-runner.md`](../ai-review/docs/self-hosted-runner.md)
+> を参照（本節は codex-review 固有の従来手順として維持する）。
 
 コンテナ型 self-hosted runner（GitHub Actions Runner を Docker コンテナで常駐させる構成）を
 前提とした設定例。ホストへ直接インストールする構成でも要件（sudo なし・userns・CODEX_HOME）は同じ。
