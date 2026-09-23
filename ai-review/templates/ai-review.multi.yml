@@ -117,8 +117,7 @@ jobs:
   # - いずれかの reviewer ジョブが success / skipped 以外（ブロック対象の指摘・レビュー未完了・
   #   実行エラー）なら失敗する
   # - 実際にレビューした reviewer（outputs.reviewed == true）が MIN_REVIEWERS 未満なら失敗する
-  #   （資格情報の設定漏れで全 reviewer が skip したまま green になる fail-open を防ぐ）。
-  #   ただし skip-branch-prefixes に一致して意図的に skip した PR は通す
+  #   （資格情報の設定漏れで全 reviewer が skip したまま green になる fail-open を防ぐ）
   # needs と env の列挙は上の reviewer ジョブと揃えること。
   ai-review-gate:
     if: always()
@@ -158,7 +157,6 @@ jobs:
           set -euo pipefail
           failed=0
           reviewed=0
-          prefix_skipped=0
           {
             echo "## AI レビュー集約"
             echo
@@ -177,15 +175,10 @@ jobs:
               *) failed=$((failed + 1)) ;;
             esac
             if [ "${done_flag}" = true ]; then reviewed=$((reviewed + 1)); fi
-            if [ "${reason}" = branch-prefix ]; then prefix_skipped=$((prefix_skipped + 1)); fi
           done
           if [ "${failed}" -gt 0 ]; then
             echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー。各ジョブと PR レビューを参照）"
             exit 1
-          fi
-          if [ "${reviewed}" -eq 0 ] && [ "${prefix_skipped}" -gt 0 ]; then
-            echo "skip-branch-prefixes に一致したためレビュー対象外（集約 gate 通過）"
-            exit 0
           fi
           if [ "${reviewed}" -lt "${MIN_REVIEWERS}" ]; then
             echo "::error::実際にレビューした reviewer が ${reviewed} 件で、MIN_REVIEWERS（${MIN_REVIEWERS}）に届きません（資格情報の設定漏れ・fork PR 等で全 reviewer が skip された）"

@@ -11,7 +11,9 @@
 #
 # 注意: runner の標準システムポリシーディレクトリ（Linux: /etc/gemini-cli/policies）に
 # .toml が存在すると `--admin-policy` の補助ポリシーは無視される（gemini-cli の仕様）。
-# runner 構築側で同ディレクトリにポリシーを置かないこと（ai-review/docs/self-hosted-runner.md）。
+# workflow は実行前に同ディレクトリを検査し、.toml が存在する・内容を確認できない場合は
+# レビューを中止する（fail-closed）。runner 構築側で同ディレクトリにポリシーを置かないこと
+# （ai-review/docs/self-hosted-runner.md）。
 
 [[rule]]
 toolName = "*"

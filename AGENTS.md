@@ -112,15 +112,16 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
   ai-review 固有の多層防御を弱める変更も同様にブロック対象とする: 作業ツリー正規化
   （prompt/schema/AGENTS.md 等の base 版への揃え、GEMINI.md の全削除、各 CLI 設定
   ディレクトリ・`.env` の除去）、claude の `--restricted --safe-mode`、gemini の
-  `--admin-policy`（読み取り系以外の全拒否）、API モードの nonce 区切り（プロンプト
+  `--admin-policy`（読み取り系以外の全拒否）とそれを無効化するシステムポリシーの
+  fail-closed 検証、API モードの nonce 区切り（プロンプト
   インジェクション対策）、`normalize-output.mjs` による出力契約の検証
-- **受容済み残留リスク: レビュー skip のブランチ接頭辞判定**: ai-review /
-  codex-review の `skip-branch-prefixes`（旧 `skip-sync-pr-review`）が head branch 名の
-  接頭辞のみで review ジョブを skip する設計は、push できる主体が該当接頭辞のブランチで
-  P0/P1 gate を回避できる残留リスクごとオーナー判断で受容済み
+- **受容済み残留リスク: レビュー skip のブランチ接頭辞判定**: codex-review の
+  `skip-branch-prefixes`（旧 `skip-sync-pr-review`）が head branch 名の接頭辞のみで
+  codex ジョブを skip する設計は、push できる主体が該当接頭辞のブランチで P0/P1 gate を
+  回避できる残留リスクごとオーナー判断で受容済み
   （`codex-review/README.md`「受容済み残留リスク」節、2026-08-18 判断・
-  2026-08-21 追記で変更ファイル集合の実測検証の撤去まで受容範囲を拡張。ai-review では
-  `ai-review/README.md`「注意事項・受容済み残留リスク」節が同内容を要約・継承する）。
+  2026-08-21 追記で変更ファイル集合の実測検証の撤去まで受容範囲を拡張）。
+  この受容は ai-review には及ばない（ai-review は同等の skip 機構を持たない）。
   同節の記載が base に存在する限り、この設計およびその導入 PR への指摘は
   「受容済み残留リスクの扱い」に従い **P2（advisory・非ブロック）**として報告し、
   detail に同節への参照を含める（指摘自体は省略しない）。判定不能時にレビュー実行側へ

@@ -174,14 +174,6 @@ on:
         type: string
         required: false
         default: "P0,P1"
-      skip-branch-prefixes:
-        description: >-
-          レビューを skip する head branch 名の接頭辞（カンマ区切り）。自動生成 PR 用。
-          push できる主体はブランチ名で gate を回避できる（受容済み残留リスク。
-          ai-review/README.md 参照）。既定は空（全 PR をレビュー）
-        type: string
-        required: false
-        default: ""
     secrets:
       API_KEY:
         description: >-
@@ -201,13 +193,13 @@ on:
         value: ${{ jobs.preflight.outputs.reviewer-id }}
       reviewed:
         description: >-
-          レビューが実行され結果が出たか（"true" / "false"）。資格情報未設定・skip 接頭辞一致で
+          レビューが実行され結果が出たか（"true" / "false"）。資格情報未設定で
           skip した場合は "false"（呼び出し側ジョブの result は success になるため、集約 gate は
           こちらで「実際にレビューしたか」を判定する）
         value: ${{ jobs.review.outputs.final_message != '' }}
       skip-reason:
         description: >-
-          skip の理由（not-configured: 資格情報・base URL 未設定 / branch-prefix: skip 接頭辞に一致 /
+          skip の理由（not-configured: 資格情報・base URL 未設定 /
           空: skip していない、または fork PR で preflight 自体が起動していない）
         value: ${{ jobs.preflight.outputs.skip-reason }}
 
@@ -252,8 +244,6 @@ jobs:
           HOME_DIR: ${{ inputs.home-dir }}
           API_BASE_URL: ${{ inputs.api-base-url }}
           API_RESPONSE_FORMAT: ${{ inputs.api-response-format }}
-          SKIP_PREFIXES: ${{ inputs.skip-branch-prefixes }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           VAR_CODEX_HOME_DIR: ${{ vars.CODEX_HOME_DIR }}
           VAR_CLAUDE_HOME_DIR: ${{ vars.CLAUDE_HOME_DIR }}
           VAR_GEMINI_HOME_DIR: ${{ vars.GEMINI_HOME_DIR }}
@@ -361,28 +351,6 @@ jobs:
             json_schema|json_object|none) ;;
             *) fail "api-response-format input が json_schema / json_object / none のいずれでもありません（値は表示しません）" ;;
           esac
-
-          # skip 判定（head branch 名の接頭辞。受容済み残留リスクは ai-review/README.md）。
-          # 入力検証の後に行い、設定ミスは skip 対象ブランチでも顕在化させる
-          prefixes=()
-          while IFS= read -r p; do
-            p="${p#"${p%%[![:space:]]*}"}"
-            p="${p%"${p##*[![:space:]]}"}"
-            if [ -n "${p}" ]; then
-              prefixes+=("${p}")
-            fi
-          done < <(printf '%s\n' "${SKIP_PREFIXES}" | tr ',' '\n')
-          for prefix in "${prefixes[@]}"; do
-            # 接頭辞内の * や ? をパターンとして解釈させない（クォートでリテラル比較）
-            case "${HEAD_REF}" in
-              "${prefix}"*)
-                echo "判定: head branch が skip 接頭辞に一致 (${prefix} → ${HEAD_REF})"
-                out run false
-                out skip-reason branch-prefix
-                exit 0
-                ;;
-            esac
-          done
 
           # 有効化判定（資格情報の有無）。未設定は skip（fail-closed な有効化スイッチ）
           auth_mode=none
@@ -492,7 +460,10 @@ jobs:
       # note: `job.workflow_repository` / `job.workflow_sha` は actionlint v1.7.12 時点で
       # 型定義が未追随のため誤検知される（lint 時は `-ignore` での抑止が必要）
       - name: Prepare defaults checkout path
-        run: rm -rf ._ai_review_defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf ._ai_review_defaults
 
       - name: Checkout bundled default control files
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -560,11 +531,44 @@ jobs:
         if: env.AI_REVIEW_MODE == 'agentic'
         shell: bash
         run: |
+          set -euo pipefail
           if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
             echo "::error::runner のジョブユーザーが passwordless sudo を保持しています。agentic レビューを中止します（runner をジョブユーザー sudo なし構成にしてください）"
             exit 1
           fi
           echo "sudo なしを確認（実行継続）"
+
+      # gemini の読み取り専用制約（--admin-policy）を runner 状態に依存させない fail-closed
+      # 検証。gemini-cli はシステムポリシーディレクトリ（Linux: /etc/gemini-cli/policies。
+      # 環境変数では変更できない固定パス）に .toml が 1 つでもあると --admin-policy を
+      # 警告のみで無視し、plan モード既定（Web 検索・取得の許可）へ戻る。そのため同ディレクトリに
+      # .toml が存在する・内容を確認できない（読み取り不可・ディレクトリでない）runner では
+      # 実行を拒否する（判定は CLI 側の readdir + endsWith(".toml") と同じ基準）
+      - name: Verify gemini system policy directory is empty
+        if: inputs.provider == 'gemini'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Linux) policies_dir=/etc/gemini-cli/policies ;;
+            Darwin) policies_dir="/Library/Application Support/GeminiCli/policies" ;;
+            *)
+              echo "::error::未対応の runner OS のため gemini のシステムポリシーを検証できません。レビューを中止します"
+              exit 1
+              ;;
+          esac
+          if [ -e "${policies_dir}" ] || [ -L "${policies_dir}" ]; then
+            if [ ! -d "${policies_dir}" ] || [ ! -r "${policies_dir}" ] || [ ! -x "${policies_dir}" ]; then
+              echo "::error::gemini のシステムポリシーディレクトリの内容を確認できません（ディレクトリでない・読み取り不可）。--admin-policy が無視される可能性があるためレビューを中止します"
+              exit 1
+            fi
+            found="$(find "${policies_dir}" -mindepth 1 -maxdepth 1 -name '*.toml' -print -quit)"
+            if [ -n "${found}" ]; then
+              echo "::error::gemini のシステムポリシーディレクトリに .toml が存在し、--admin-policy（読み取り系以外の全拒否）が無視されます。レビューを中止します（runner から削除してください。ai-review/docs/self-hosted-runner.md）"
+              exit 1
+            fi
+          fi
+          echo "gemini システムポリシー不在を確認（--admin-policy が有効。実行継続）"
 
       # CLI が読み書きするファイルを PR の checkout 内容から切り離す多層防御
       # （codex-review.yml から引き継ぎ。symlink 対策の経緯は Fandhe-AI/fandhe-backend PR #526）:
@@ -1083,6 +1087,7 @@ jobs:
       - name: Gate on review completion
         shell: bash
         run: |
+          set -euo pipefail
           completed="$(node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(r.review_completed === true))' "$RUNNER_TEMP/ai-review.json")"
           if [ "${completed}" != "true" ]; then
             echo "::error::AI レビューが完了していません（review_completed != true。理由は PR コメントの summary 参照）"

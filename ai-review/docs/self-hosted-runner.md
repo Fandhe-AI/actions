@@ -77,7 +77,8 @@ userns 不要。
   コンテナ内パスを設定する
 - **`/etc/gemini-cli/policies/` に `.toml` を置かない**。置くと workflow の
   `--admin-policy`（読み取り系以外を全拒否する補助ポリシー）が無視される（gemini-cli の
-  仕様）
+  仕様）。workflow は実行前に同ディレクトリを検査し、`.toml` が存在する・内容を確認できない
+  （読み取り不可等）場合はレビューを中止する（fail-closed）
 - ホーム側 `.gemini/GEMINI.md`（グローバルメモリ）を置かない
 - gemini CLI にはセッション履歴を残さないオプションが無く、home-dir 方式では実行のたびに
   `.gemini/history/`・`.gemini/tmp/`・`projects.json` が蓄積する（ディスク消費に加え、将来

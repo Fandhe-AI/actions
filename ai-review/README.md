@@ -176,7 +176,7 @@ required にする運用のどちらかを選ぶ。
   `blocking-count`、`result`
 - `ai-review-gate` は `MIN_REVIEWERS`（既定 1）未満しかレビューが実行されなかった場合に
   失敗する（資格情報の設定漏れで全 reviewer が skip されたまま green になる fail-open を
-  防ぐ）。ただし `skip-branch-prefixes` に一致して意図的に skip した PR は通す。fork PR を
+  防ぐ）。fork PR を
   受け付ける public リポジトリで本ジョブを required にする場合は、fork PR では全 reviewer が
   起動しないため `MIN_REVIEWERS` の扱いを branch protection 側で設計すること
 - 同じ provider を複数ジョブ（例: local LLM 2 モデル）で使う場合は `reviewer-id` を必ず
@@ -207,7 +207,6 @@ required にする運用のどちらかを選ぶ。
 | `prompt-path` | - | `.github/ai-review/prompts/review.md` | 呼び出し側リポジトリのレビュー prompt パス |
 | `schema-path` | - | `.github/ai-review/review-schema.json` | 呼び出し側リポジトリの出力 schema パス |
 | `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り）。P0/P1 は必須集合（除外不可） |
-| `skip-branch-prefixes` | - | （空） | レビューを skip する head branch 名の接頭辞（カンマ区切り）。受容済み残留リスクは後述 |
 
 ### Secrets
 
@@ -223,7 +222,7 @@ required にする運用のどちらかを選ぶ。
 | `blocking-count` | ブロック対象 priority の指摘件数（gate 未到達・skip 時は空） |
 | `reviewer-id` | 解決済みの reviewer-id |
 | `reviewed` | レビューが実行され結果が出たか（`"true"` / `"false"`） |
-| `skip-reason` | skip の理由（`not-configured` / `branch-prefix` / 空） |
+| `skip-reason` | skip の理由（`not-configured` / 空） |
 
 ## 参照バージョン（`@latest`）
 
@@ -244,7 +243,8 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
    | `runner-label` | `runner` | |
    | `post-feedback-runner-label` | `post-feedback-runner` | |
    | `codex-version` | `cli-version` | |
-   | `model` / `reasoning-effort` / `timeout-minutes` / `block-priorities` / `skip-branch-prefixes` | 同名 | |
+   | `model` / `reasoning-effort` / `timeout-minutes` / `block-priorities` | 同名 | |
+   | `skip-branch-prefixes` | （未提供） | ai-review には head branch 名によるレビュー skip 機構を設けていない（後述）。codex-review で指定していた場合、移行後は該当ブランチの PR もレビュー対象になる |
    | `prompt-path` / `schema-path` | 同名 | 既定パスが `.github/codex/...` から `.github/ai-review/...` へ変わる。カスタム版を置いている場合は移動するか、`prompt-path` / `schema-path` で旧パスを明示する |
 
    加えて `provider: codex` を指定する（codex-review には無かった必須入力）。
@@ -263,28 +263,15 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
 3. **旧 codex スレッドの引き継ぎ**: `codex` reviewer は旧 `<!-- codex-review-finding -->`
    マーカーも自分のものとして扱うため、移行後の初回レビューで旧スレッドを自動 resolve する
 
-## 注意事項・受容済み残留リスク
+## 注意事項
 
-### `skip-branch-prefixes` の受容済み残留リスク（2026-08-18 オーナー判断・2026-08-21 更新、`codex-review` から継承）
+### head branch 名によるレビュー skip は未提供
 
-`preflight` は「skip 対象の自動生成 PR かどうか」を head branch 名の接頭辞のみで判定する。
-**この判定は、リポジトリへ push できる主体による偽装を防げない。** ブランチ名は push
-できる誰でも付けられ、GitHub 上に「その PR が同期ワークフロー由来である」ことを示す
-偽造不能な signal は無い。
-
-したがってこの入力を指定したリポジトリでは、write 権限を持つ主体が指定接頭辞のブランチから
-**任意の変更**を含む PR を出すと、AI レビューと P0/P1 gate を通らずにマージ候補まで到達
-できる。この残留を承知のうえで使用する判断を採っている。根拠は次の 2 点。
-
-- 迂回できるのは対象リポジトリへ push できる主体に限られる（fork PR は `preflight` 自体が
-  起動しない）。この集合は Fandhe-AI 配下では実質オーナーとその資格情報で動くエージェントで、
-  同期 PR を生成している主体そのものと一致する。**write 権限と ruleset 管理権限は別である**
-  ため「迂回できる者は ruleset も変えられる」とは言えない点に注意する。第三者の write
-  コラボレーターを迎える場合はこの入力を空へ戻す判断が要る
-- Cursor Bugbot は Actions 側の skip の影響を受けず、skip 対象の PR も従来どおりレビューする
-
-指定しないリポジトリ（既定は空）ではこの経路は存在しない。詳細な経緯（実測検証の撤去判断等）
-は `codex-review/README.md`「`skip-branch-prefixes` の受容済み残留リスク」節を参照。
+codex-review の `skip-branch-prefixes`（自動生成 PR をブランチ名の接頭辞だけでレビュー対象外に
+する入力）は、push できる主体がブランチ名で P0/P1 gate を回避できる残留リスクを伴う。この
+受容判断は codex-review に対するもので ai-review には及ばないため、ai-review には同等の skip
+機構を設けていない（全 PR をレビューする）。必要になった場合は、受容判断を本 README へ記載する
+PR を先にレビュー・マージしてから、別 PR で導入する。
 
 ### その他の注意
 
@@ -306,7 +293,7 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
 | `bwrap: No permissions to create a new namespace`（codex のみ） | unprivileged user namespace が禁止されている | seccomp / AppArmor プロファイルで userns 作成を許可する |
 | CLI インストールに失敗する | runner から `registry.npmjs.org` へ到達できない | runner のネットワーク・プロキシ設定を確認する |
 | `FatalUntrustedWorkspaceError`（gemini） | 通常は本 workflow が `GEMINI_CLI_TRUST_WORKSPACE=true` を設定済みで回避される | 自前 wrapper で環境変数を上書きしていないか確認する |
-| gemini の `--admin-policy` が効いていない | runner の `/etc/gemini-cli/policies/` に `.toml` が置かれている | 標準システムポリシーディレクトリから撤去する（`docs/self-hosted-runner.md`） |
+| `Verify gemini system policy directory is empty` で失敗する | runner の `/etc/gemini-cli/policies/` に `.toml` が置かれている（`--admin-policy` が無視されるため fail-closed で中止）、または同ディレクトリを読み取れない | 標準システムポリシーディレクトリから撤去する・権限を直す（`docs/self-hosted-runner.md`） |
 | API provider で `404 model not found` | `model` の指定ミス、またはサーバーにモデル未登録 | Actions variable の `model` 値とサーバー側の登録名を確認する |
 | API provider で schema エラー | サーバーが `json_schema` strict に未対応 | `api-response-format` を `json_object` / `none` へ下げる |
 | `review_completed: false`（差分超過） | `max-diff-bytes` 超過（API provider） | `max-diff-bytes` を引き上げる、または PR を分割する |

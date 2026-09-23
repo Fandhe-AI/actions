@@ -41,9 +41,6 @@ jobs:
       # model: gpt-6-astra               # 深いレビューが要る場合（quota 消費が大きい）
       # reasoning-effort: medium
       # block-priorities: "P0,P1,P2"     # P2 もブロック対象に追加（P0/P1 は除外不可）
-      # skip-branch-prefixes: chore/skills-update-,chore/submodule-update-
-      #   ↑ 自動生成 PR を対象外にする。push できる主体はブランチ名で gate を回避できる
-      #     （受容済み残留リスク。第三者の write コラボレーターがいる場合は指定しない）
     # secrets:
     #   API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
