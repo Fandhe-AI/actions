@@ -6,8 +6,8 @@
 Codex による PR 自動レビュー（`.github/workflows/codex-review-self.yml`。本リポジトリ自身の
 codex-review reusable workflow を呼び出す self wrapper）は、PR の base コミットの本ファイルを
 レビュー基準として読む。運用ガイドの正は `CLAUDE.md`、実装規約の詳細は `.claude/rules/`
-（`coding-actions.md` / `security.md`）と `docs/`（`runner-policy.md` /
-`codex-review-runner-exception.md`）を参照し、本書は重複させずレビュー判定基準に絞る。
+（`coding-actions.md` / `security.md`）と `docs/`（`runner-policy.md`）・
+`ai-review/docs/`（`runner-exception.md`）を参照し、本書は重複させずレビュー判定基準に絞る。
 
 本リポジトリは **Fandhe-AI Organization 全体の CI 基盤（Composite Action・reusable
 workflow）**であり、消費側リポジトリは `@latest` で本リポジトリを参照する。ここでの欠陥・
@@ -98,22 +98,32 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
   セットアップ / Inputs テーブル / SHA の更新方法 / 注意事項）に従う（`CLAUDE.md`）。
   inputs 追加時の Inputs テーブル未更新は P1
 - **消費側から参照される docs の整合（P1）**: `docs/runner-policy.md` /
-  `docs/codex-review-runner-exception.md` は消費側リポジトリの規約から参照される
-  組織横断文書。挙動変更とこれら文書の記述が乖離する PR は指摘する
+  `ai-review/docs/runner-exception.md`（旧 `docs/codex-review-runner-exception.md`。
+  移動後の旧パスはリンク切れ防止のための案内 stub のみ残置）は消費側リポジトリの規約から
+  参照される組織横断文書。挙動変更とこれら文書の記述が乖離する PR は指摘する
 - **セットアップ手順の完結性（P2）**: 新規アクションは README のワークフロー例だけで
   導入が完結すること（Secrets 登録手順・SHA 取得コマンドを含む）
 
 ## リポジトリ固有の観点
 
-- **codex-review の多層防御（P0）**: prompt / schema / AGENTS.md の base 参照抽出、
-  `project_doc_max_bytes=0` による自動読込無効化、`review_completed` の fail-closed 判定
-  など、レビュー実行の自己参照攻撃対策を弱める変更はブロックする
+- **ai-review / codex-review の多層防御（P0）**: prompt / schema / AGENTS.md の base 参照
+  抽出、`project_doc_max_bytes=0`（codex）等の自動読込無効化、`review_completed` の
+  fail-closed 判定など、レビュー実行の自己参照攻撃対策を弱める変更はブロックする。
+  ai-review 固有の多層防御を弱める変更も同様にブロック対象とする: 作業ツリー正規化
+  （prompt/schema/AGENTS.md 等の base 版への揃え、GEMINI.md の全削除、各 CLI 設定
+  ディレクトリ・`.env` の除去）、claude の `--restricted --safe-mode`、gemini の
+  `--admin-policy`（読み取り系以外の全拒否）とそれを無効化するシステムポリシーの
+  fail-closed 検証、home-dir・API 送信先を PR が書き換えられる input だけで決めない解決
+  （home-dir は Actions variable のみ、grok 送信先は固定、openai-compatible 送信先は
+  許可リスト完全一致）、API モードの nonce 区切り（プロンプト
+  インジェクション対策）、`normalize-output.mjs` による出力契約の検証
 - **受容済み残留リスク: レビュー skip のブランチ接頭辞判定**: codex-review の
   `skip-branch-prefixes`（旧 `skip-sync-pr-review`）が head branch 名の接頭辞のみで
   codex ジョブを skip する設計は、push できる主体が該当接頭辞のブランチで P0/P1 gate を
   回避できる残留リスクごとオーナー判断で受容済み
   （`codex-review/README.md`「受容済み残留リスク」節、2026-08-18 判断・
   2026-08-21 追記で変更ファイル集合の実測検証の撤去まで受容範囲を拡張）。
+  この受容は ai-review には及ばない（ai-review は同等の skip 機構を持たない）。
   同節の記載が base に存在する限り、この設計およびその導入 PR への指摘は
   「受容済み残留リスクの扱い」に従い **P2（advisory・非ブロック）**として報告し、
   detail に同節への参照を含める（指摘自体は省略しない）。判定不能時にレビュー実行側へ

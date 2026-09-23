@@ -1,5 +1,11 @@
 name: Codex PR review (reusable)
 
+# 【凍結・後継あり】本 workflow は既存の呼び出し側（`@latest` 参照・required status check 名
+# `<job> / codex` 等）を壊さないために残置している。新規導入・機能追加は provider 非依存の
+# 後継 `.github/workflows/ai-review.yml`（codex / claude / gemini / grok / local LLM、複数モデル
+# 同時レビュー対応）で行う。移行手順は ai-review/README.md「codex-review からの移行」を参照。
+# 本ファイルへはセキュリティ修正以外の変更を加えない。
+
 # Codex CLI（codex exec 直接実行）による PR 自動レビューの reusable workflow。
 # Fandhe-AI/fandhe-backend で構築・実証した codex-review.yml（同リポジトリ PR #520/#521/#526、
 # 設計経緯・脆弱性指摘への対処はそちらのイシュー #523〜#525 と各 PR レビューを参照）を

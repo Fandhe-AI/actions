@@ -1,0 +1,34 @@
+# ai-review reusable workflow が gemini provider 実行時に `--admin-policy` で渡す
+# Policy Engine ルール（Admin tier。User / Workspace / Default の各 tier より常に優先）。
+#
+# レビューは読み取り専用で行う。`--approval-mode plan` に加えて、ここで
+# 「ワークスペース内のファイル読み取り系ツール以外を全拒否」を明示する多層防御:
+# - plan モード既定で許可される google_web_search / web_fetch（外向き通信 = PR 内容の
+#   外部送出経路になりうる）を拒否する
+# - シェル実行・書き込み・MCP ツール・サブエージェント起動を拒否する
+# 最も高い priority の一致ルールが採用されるため、読み取り系の allow（900）が
+# 全拒否（800 / 850）より優先される。
+#
+# 注意: runner の標準システムポリシーディレクトリ（Linux: /etc/gemini-cli/policies）に
+# .toml が存在すると `--admin-policy` の補助ポリシーは無視される（gemini-cli の仕様）。
+# workflow は実行前に同ディレクトリを検査し、.toml が存在する・内容を確認できない場合は
+# レビューを中止する（fail-closed）。runner 構築側で同ディレクトリにポリシーを置かないこと
+# （ai-review/docs/self-hosted-runner.md）。
+
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 800
+denyMessage = "ai-review: 読み取り専用レビューのため、ファイル読み取り系以外のツールは使用できません"
+
+[[rule]]
+toolName = "*"
+mcpName = "*"
+decision = "deny"
+priority = 850
+denyMessage = "ai-review: MCP ツールは使用できません"
+
+[[rule]]
+toolName = ["glob", "grep_search", "list_directory", "read_file", "read_many_files"]
+decision = "allow"
+priority = 900

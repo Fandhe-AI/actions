@@ -14,7 +14,8 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | [project-sync](project-sync/) | Issue/PR の状態変更を GitHub Project (V2) の Status フィールドに自動同期する |
 | [submodule-update](submodule-update/) | git submodule を最新に追従させ、変更があれば PR を自動作成する |
 | [skills-update](skills-update/) | `npx skills` で導入したエージェントスキルを最新に更新し、変更があれば PR を自動作成する |
-| [codex-review](codex-review/) | OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
+| [ai-review](ai-review/) | 複数 AI provider（Codex / Claude / Gemini / Grok / OpenAI 互換 API）による PR 自動レビュー（reusable workflow。複数モデル同時レビュー対応、runner/認証を provider ごとに切替、P0/P1 検出時に CI 失敗） |
+| [codex-review](codex-review/) | **凍結・後継 [ai-review](ai-review/)**。OpenAI Codex CLI による PR 自動レビュー（reusable workflow。ChatGPT ログイン済み self-hosted runner で動作、P0/P1 検出時に CI 失敗） |
 | [rust-base-ci](rust-base-ci/) | Rust のベースライン品質ゲート（`cargo fmt` / `clippy` / `test` / `deny`。reusable workflow。runner は inputs で指定、`Cargo.toml` 不在時は安全に skip） |
 | [pages-deploy](pages-deploy/) | GitHub Pages への deploy（reusable workflow。呼び出し側 build ジョブの dist を artifact で受け取り、Pages artifact 変換〜deploy まで担う） |
 | [update-external](update-external/) | 外部ソース（submodule 参照 / エージェントスキル）の定期更新（reusable workflow。PAT 未設定時は fail-closed、runner・submodule 更新の要否・auto-merge は呼び出し元指定。古い日次更新 PR の自動 close はオプトイン。下流は wrapper 1 ファイルのみ持つ） |
@@ -25,7 +26,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | ドキュメント | 説明 |
 |---|---|
 | [docs/runner-policy.md](docs/runner-policy.md) | 組織 runner 方針（public は GitHub ホステッド / private は self-hosted、対象リポジトリ一覧、codex-review 例外、rust-cache 利用時の注意） |
-| [docs/codex-review-runner-exception.md](docs/codex-review-runner-exception.md) | codex-review runner 例外の適用ガイド（適用条件の担保責任、public 向け wrapper、例外が及ばない範囲、消費側規約からの参照方法） |
+| [ai-review/docs/runner-exception.md](ai-review/docs/runner-exception.md) | ai-review runner 例外の適用ガイド（適用条件の担保責任、public 向け wrapper、例外が及ばない範囲、消費側規約からの参照方法） |
 
 ## 使い方
 
@@ -41,10 +42,16 @@ steps:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-reusable workflow（`codex-review` / `pages-deploy`）も同様に `@latest` で参照します：
+reusable workflow（`ai-review` / `codex-review` / `pages-deploy` 等）も同様に `@latest` で
+参照します：
 
 ```yaml
 jobs:
+  ai-review:
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    with:
+      provider: codex
+
   deploy:
     uses: Fandhe-AI/actions/.github/workflows/pages-deploy.yml@latest
 ```
