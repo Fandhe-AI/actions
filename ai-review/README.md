@@ -219,8 +219,8 @@ required にする運用のどちらかを選ぶ。
 | `max-diff-bytes` | - | `300000` | API provider で prompt に埋め込む差分の上限バイト数。超過時は未完了扱い |
 | `diff-context-lines` | - | `10` | レビュー入力の差分の文脈行数 |
 | `timeout-minutes` | - | `30` | review ジョブの timeout（分） |
-| `prompt-path` | - | `.github/ai-review/prompts/review.md` | 呼び出し側リポジトリのレビュー prompt パス |
-| `schema-path` | - | `.github/ai-review/review-schema.json` | 呼び出し側リポジトリの出力 schema パス |
+| `prompt-path` | - | `.github/ai-review/prompts/review.md` | 呼び出し側リポジトリのレビュー prompt パス（英数字と `. _ / -` のみのリポジトリ相対パス。絶対パス・`..`・`.`・空セグメント・末尾 `/`・先頭 `-` は拒否） |
+| `schema-path` | - | `.github/ai-review/review-schema.json` | 呼び出し側リポジトリの出力 schema パス（制約は `prompt-path` と同じ） |
 | `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り）。P0/P1 は必須集合（除外不可） |
 
 ### Secrets

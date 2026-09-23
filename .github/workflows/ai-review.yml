@@ -641,10 +641,19 @@ jobs:
           fi
           echo "base sha: ${BASE_SHA} / head sha: ${HEAD_SHA}"
 
+          # パスは以降のログ出力・git / rm の引数に使うため、リポジトリ相対パスに必要な文字
+          # だけを許可する（改行・制御文字・":" を含む値による workflow command 注入、先頭 "-"
+          # によるオプション解釈、空セグメント・末尾 "/" によるディレクトリ指定を拒否）。
+          # bash の [[ =~ ]] は文字列全体に対してアンカーする（改行を行単位で素通りさせない）
+          path_re='^[A-Za-z0-9._][A-Za-z0-9._/-]{0,254}$'
           for f in "${PROMPT_PATH}" "${SCHEMA_PATH}"; do
+            if ! [[ "${f}" =~ ${path_re} ]]; then
+              echo "::error::不正な制御ファイルパスです（英数字と . _ / - のみのリポジトリ相対パスで指定してください。値は表示しません）"
+              exit 1
+            fi
             case "/${f}/" in
-              //*|*/../*|*/./*)
-                echo "::error::不正な制御ファイルパスです（絶対パス・.. ・. セグメントを拒否。値は表示しません）"
+              //*|*/../*|*/./*|*//*)
+                echo "::error::不正な制御ファイルパスです（絶対パス・.. ・. ・空セグメント・末尾 / を拒否。値は表示しません）"
                 exit 1
                 ;;
             esac
@@ -1174,7 +1183,7 @@ jobs:
             }
             for (const p of prios) {
               if (!valid.has(p)) {
-                console.error("block-priorities に不正な値があります: " + JSON.stringify(p) + "（P0〜P3 のカンマ区切りのみ許可）");
+                console.error("block-priorities に不正な値があります（P0〜P3 のカンマ区切りのみ許可。値は表示しません）");
                 process.exit(1);
               }
             }
@@ -1188,7 +1197,8 @@ jobs:
             process.stdout.write(String((r.findings ?? []).filter(f => f && prios.includes(f.priority)).length));
           ' "$RUNNER_TEMP/ai-review.json")"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
-          display="$(printf '%s' "${BLOCK_PRIORITIES}" | tr -d '\r\n')"
+          # 検証済みだが、ログへは P0〜P3 とカンマ以外を除いた値だけを出す
+          display="$(printf '%s' "${BLOCK_PRIORITIES}" | tr -cd 'P0123,')"
           if [ "${count}" -gt 0 ]; then
             echo "::error::AI レビューでブロック対象（${display}）の指摘が ${count} 件検出されました（詳細は PR コメント参照）"
             exit 1
