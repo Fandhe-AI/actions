@@ -311,6 +311,7 @@ PR を先にレビュー・マージしてから、別 PR で導入する。
 | `Verify gemini system policy directory is empty` で失敗する | runner の `/etc/gemini-cli/policies/` に `.toml` が置かれている（`--admin-policy` が無視されるため fail-closed で中止）、または同ディレクトリを読み取れない | 標準システムポリシーディレクトリから撤去する・権限を直す（`docs/self-hosted-runner.md`） |
 | API provider で `404 model not found` | `model` の指定ミス、またはサーバーにモデル未登録 | Actions variable の `model` 値とサーバー側の登録名を確認する |
 | API provider で schema エラー | サーバーが `json_schema` strict に未対応 | `api-response-format` を `json_object` / `none` へ下げる |
+| `review_completed: false`（指摘が処理上限超過） | 指摘が 200 件を超えた（一部だけを完了扱いで投稿すると欠落するため未完了にする） | PR を分割する、または生成ファイル等の指摘が集中する原因を差分から外す |
 | `review_completed: false`（差分超過） | `max-diff-bytes` 超過（API provider） | `max-diff-bytes` を引き上げる、または PR を分割する |
 | preflight が「api-base-url が … 許可リストに含まれていません」で失敗する | `api-base-url` が Actions variable `AI_REVIEW_API_BASE_URLS` のどの値とも完全一致しない（末尾 `/` の有無も区別する） | 許可リストへ同じ文字列を登録する |
 | review ジョブが「home-dir が PR の作業ディレクトリまたはジョブ一時領域の内側を指しています」で失敗する | `*_HOME_DIR` 変数が `$GITHUB_WORKSPACE` / `$RUNNER_TEMP` 配下（symlink 解決後）を指している | runner のマウント先（例 `/opt/codex-home`）へ変更する |

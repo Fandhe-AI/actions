@@ -160,10 +160,21 @@ for (const f of candidate.findings) {
   });
 }
 if (findings.length > MAX_FINDINGS) {
-  // 上限超過分を捨てると P0 を取りこぼしうるため、ブロック対象になりうる優先度から残す
-  findings.sort((a, b) => a.priority.localeCompare(b.priority));
-  console.error(`::warning::findings が ${findings.length} 件あるため、優先度順に先頭 ${MAX_FINDINGS} 件へ切り詰めます`);
-  findings.length = MAX_FINDINGS;
+  // 上限超過分を黙って捨てて「完了」とすると指摘が欠落したまま正常完了に見えるため、
+  // 件数を削らずレビュー未完了として扱う（fail-closed。gate が失敗し、PR には未完了として
+  // 理由を投稿する）
+  const result = {
+    summary:
+      `AI レビューの指摘が ${findings.length} 件あり、処理上限（${MAX_FINDINGS} 件）を超えました。` +
+      '一部の指摘だけを完了扱いで投稿すると指摘が欠落するため、レビュー未完了として扱います' +
+      '（fail-closed）。PR を分割するか、指摘の多い原因（生成ファイル等）を差分から外してください。',
+    review_completed: false,
+    findings: [],
+    resolved_threads: [],
+  };
+  writeFileSync(outPath, JSON.stringify(result));
+  console.error(`::warning::findings が ${findings.length} 件あり上限（${MAX_FINDINGS} 件）を超えたため、未完了結果へ置き換えました`);
+  process.exit(0);
 }
 
 const resolvedThreads = (candidate.resolved_threads ?? [])
