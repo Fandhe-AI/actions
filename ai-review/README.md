@@ -20,8 +20,10 @@ provider は 2 方式に分かれる。
 | `grok` | api | xAI API（OpenAI 互換 `https://api.x.ai/v1`） | ツール自体を渡さない | `response_format: json_schema`（strict） | private: self-hosted / public: `ubuntu-latest` | 必須（`model` 入力） | API_KEY 必須（xAI API キー） |
 | `openai-compatible` | api | vLLM / SGLang 等の local LLM、Gemini の OpenAI 互換 endpoint 等 | ツール自体を渡さない | `api-response-format`（json_schema/json_object/none） | private: self-hosted / public: `ubuntu-latest` | 必須（`model` 入力） | `api-base-url`（Actions variable `AI_REVIEW_API_BASE_URLS` の許可リストと完全一致）+ `model` 必須、API_KEY 任意 |
 
-`gemini` は `reasoning-effort` 非対応。`openai-compatible` は `max-diff-bytes` 超過時に
-API を呼ばず fail-closed で未完了扱いにする（部分レビューを完了扱いにしない）。
+`gemini` は `reasoning-effort` 非対応。API provider（`grok` / `openai-compatible`）は
+`max-diff-bytes` 超過時に API を呼ばず fail-closed で未完了扱いにする（部分レビューを完了扱いに
+しない）。`openai-compatible` で `auth: api-key` を明示した場合は secret `API_KEY` を必須とする
+（未設定なら skip。無認証送信へ黙って倒さない）。
 
 ## 仕組み
 
@@ -73,8 +75,9 @@ API を呼ばず fail-closed で未完了扱いにする（部分レビューを
   から削除（gemini はサブディレクトリも自動注入するため）、各 CLI のプロジェクト設定
   （`.codex` / `.claude` / `.gemini` / `.agents` / `.mcp.json`）と `.env` は削除する
 - CLI は `$RUNNER_TEMP` へ固定バージョンで導入する（`latest` 等の可変 dist-tag は拒否）
-- API モードは差分等を毎回ランダムな nonce 区切りで埋め込み（データ区切りの偽装によるプロンプト
-  インジェクションを防ぐ）、リダイレクトを拒否する（別ホストへの Authorization ヘッダ持ち越し
+- API モードは差分・未解決レビュースレッド一覧等を毎回ランダムな nonce 区切りで埋め込み
+  （データ区切りの偽装によるプロンプトインジェクションを防ぐ。スレッド本文など PR 参加者が
+  書けるデータは指示文側へ連結しない）、リダイレクトを拒否する（別ホストへの Authorization ヘッダ持ち越し
   を防ぐ）
 - ログは資格情報パターンをマスクし、`::stop-commands::` で囲んでから公開する
 - レビュー出力は公開前に資格情報パターン（+ api-key 認証時はキーの実値）をスキャンし、
