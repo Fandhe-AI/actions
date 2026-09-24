@@ -262,7 +262,7 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
    | `post-feedback-runner-label` | `post-feedback-runner` | |
    | `codex-version` | `cli-version` | |
    | `model` / `reasoning-effort` / `timeout-minutes` / `block-priorities` | 同名 | |
-   | `skip-branch-prefixes` | （未提供） | ai-review には head branch 名によるレビュー skip 機構を設けていない（後述）。codex-review で指定していた場合、移行後は該当ブランチの PR もレビュー対象になる |
+   | `skip-branch-prefixes` | （導入予定） | 受容判断は後述「`skip-branch-prefixes` の受容済み残留リスク」に記載済みで、実装は後続 PR で行う。実装までの間に移行すると該当ブランチの PR もレビュー対象になる |
    | `prompt-path` / `schema-path` | 同名 | 既定パスが `.github/codex/...` から `.github/ai-review/...` へ変わる。カスタム版を置いている場合は移動するか、`prompt-path` / `schema-path` で旧パスを明示する |
 
    加えて `provider: codex` を指定する（codex-review には無かった必須入力）。
@@ -283,13 +283,51 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
 
 ## 注意事項
 
-### head branch 名によるレビュー skip は未提供
+### `skip-branch-prefixes` の受容済み残留リスク（2026-09-24 オーナー判断）
 
-codex-review の `skip-branch-prefixes`（自動生成 PR をブランチ名の接頭辞だけでレビュー対象外に
-する入力）は、push できる主体がブランチ名で P0/P1 gate を回避できる残留リスクを伴う。この
-受容判断は codex-review に対するもので ai-review には及ばないため、ai-review には同等の skip
-機構を設けていない（全 PR をレビューする）。必要になった場合は、受容判断を本 README へ記載する
-PR を先にレビュー・マージしてから、別 PR で導入する。
+codex-review から ai-review への移行にあたり、`update-external.yml` が生成する日次同期 PR
+（`chore/skills-update-*` / `chore/submodule-update-*`。org 全体で auto-merge 有効）を
+レビュー対象外にする head branch 名の接頭辞 skip を ai-review にも導入する。同期 PR は上流の
+取り込みそのもので、指摘の修正先が取り込み元の上流リポジトリにしかなく、レビューしても
+quota を消費するうえ上流由来の P0/P1 で auto-merge が止まるだけになるためである。
+この節は受容判断の記載で、実装は本節を base に含む後続 PR で行う（それまでは skip 機構は
+存在せず、全 PR をレビューする）。
+
+受容する設計は次のとおり（codex-review の `skip-branch-prefixes` と同じ接頭辞のみ判定）:
+
+- 入力 `skip-branch-prefixes`（カンマ区切り、各要素は前後の空白を除去、既定は空）。
+  `preflight` ジョブが入力検証の後・資格情報の有効化判定の前に、
+  `github.event.pull_request.head.ref` を各接頭辞とリテラルの前方一致で比較する
+  （`*` / `?` をパターンとして解釈しない）
+- 一致した場合は `review` / `post_feedback` を実行せず、output `skip-reason` を
+  `branch-prefix`、`reviewed` を `"false"` にする。provider を問わずその reviewer ジョブ全体が
+  skip 対象になる（複数モデル構成では各 reviewer ジョブに同じ値を渡す）
+- 複数モデル構成の集約 gate（`ai-review-gate`）は、`MIN_REVIEWERS` の判定で全 reviewer の
+  `skip-reason` が `branch-prefix` の場合に限り、レビュー 0 件を許容する
+- fork PR では `preflight` 自体が起動しないため、この skip 経路も存在しない
+- 判定不能時（`preflight` の失敗・output の欠落）は skip 側へ倒さない（`preflight` の失敗は
+  required check の失敗としてマージを止め、集約 gate は `branch-prefix` を明示的に受け取った
+  場合にしかレビュー 0 件を許容しない）
+
+**この判定は、リポジトリへ push できる主体による偽装を防げない。** ブランチ名は push
+できる誰でも付けられ、GitHub 上に「その PR が同期ワークフロー由来である」ことを示す偽造不能な
+signal は無い。したがってこの入力を指定したリポジトリでは、write 権限を持つ主体が指定接頭辞の
+ブランチから**任意の変更**を含む PR を出すと、AI レビューと P0/P1 gate を通らずにマージ候補まで
+到達できる。
+
+この残留を承知のうえで使用する判断を採っている。根拠は codex-review の同判断
+（[`codex-review/README.md`](../codex-review/README.md)「`skip-branch-prefixes` の受容済み残留
+リスク」、2026-08-18 判断・2026-08-21 更新）と同じで、次の 2 点。
+
+- 迂回できるのは対象リポジトリへ push できる主体に限られ、Fandhe-AI 配下では実質オーナーと
+  その資格情報で動くエージェントで、同期 PR を生成している主体そのものと一致する。
+  **write 権限と ruleset 管理権限は別である**ため「迂回できる者は ruleset も変えられる」とは
+  言えない点に注意する。第三者の write コラボレーターを迎える場合はこの入力を空へ戻す判断が要る
+- Cursor Bugbot は Actions 側の skip の影響を受けず、skip 対象の PR も従来どおりレビューする
+
+指定しないリポジトリ（既定は空）ではこの経路は存在しない。判定不能時に skip 側へ倒す
+fail-open 化・fork PR への拡大・接頭辞以外の条件（actor・ラベル等）による skip の新設は
+受容範囲外である。
 
 ### その他の注意
 

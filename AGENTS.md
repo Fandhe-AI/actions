@@ -123,11 +123,14 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
   回避できる残留リスクごとオーナー判断で受容済み
   （`codex-review/README.md`「受容済み残留リスク」節、2026-08-18 判断・
   2026-08-21 追記で変更ファイル集合の実測検証の撤去まで受容範囲を拡張）。
-  この受容は ai-review には及ばない（ai-review は同等の skip 機構を持たない）。
-  同節の記載が base に存在する限り、この設計およびその導入 PR への指摘は
+  ai-review の同名入力（`preflight` ジョブでの同じ接頭辞のみ判定。複数モデル構成の集約
+  gate が全 reviewer の `skip-reason: branch-prefix` を明示的に受け取った場合に限り
+  レビュー 0 件を許容する設計を含む）も、`ai-review/README.md`「`skip-branch-prefixes` の
+  受容済み残留リスク」節（2026-09-24 判断）で同じ前提のもと受容済み。
+  各節の記載が base に存在する限り、この設計およびその導入 PR への指摘は
   「受容済み残留リスクの扱い」に従い **P2（advisory・非ブロック）**として報告し、
   detail に同節への参照を含める（指摘自体は省略しない）。判定不能時にレビュー実行側へ
-  倒す fail-closed 構造の毀損・fork PR への拡大・同 README の受容記載を伴わない
+  倒す fail-closed 構造の毀損・fork PR への拡大・各 README の受容記載を伴わない
   類似 skip の新設は受容範囲外で、従来どおり P0
 - **YAML の検証（P2）**: action.yml / workflow YAML の変更は
   `python3 -c "import yaml; yaml.safe_load(...)"` 等での構文確認を経る。ステップ名に
