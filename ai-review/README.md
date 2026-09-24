@@ -292,8 +292,8 @@ codex-review から ai-review への移行にあたり、`update-external.yml` �
 レビュー対象外にする head branch 名の接頭辞 skip を ai-review にも導入する。同期 PR は上流の
 取り込みそのもので、指摘の修正先が取り込み元の上流リポジトリにしかなく、レビューしても
 quota を消費するうえ上流由来の P0/P1 で auto-merge が止まるだけになるためである。
-この節は受容判断の記載で、実装は本節を base に含む後続 PR で行う（それまでは skip 機構は
-存在せず、全 PR をレビューする）。
+この節は受容判断の記載で、実装は本節を base に含む後続 PR（#144）で導入済み
+（入力 `skip-branch-prefixes`。Inputs 表を参照）。
 
 受容する設計は次のとおり（codex-review の `skip-branch-prefixes` と同じ接頭辞のみ判定）:
 
