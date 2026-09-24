@@ -278,8 +278,8 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
    2. マージ直前に ruleset / branch protection の required checks を旧名から新名へ置き換える
    3. 移行 PR をマージする（以降の PR は新 check のみで判定される）
 
-   本リポジトリ自身の self wrapper（`codex-review-self.yml`）の移行も、この手順に従って
-   別 PR で行う
+   本リポジトリ自身の self wrapper も、この手順で `codex-review-self.yml` から
+   `ai-review-self.yml` へ移行済み
 3. **旧 codex スレッドの引き継ぎ**: `codex` reviewer は旧 `<!-- codex-review-finding -->`
    マーカーも自分のものとして扱うため、移行後の初回レビューで旧スレッドを自動 resolve する
 

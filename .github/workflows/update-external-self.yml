@@ -5,7 +5,7 @@
 # 呼び出し側リポジトリと同じ薄い wrapper を別ファイル名で追加して自己適用する。
 # 内容は wrapper テンプレート（update-external/templates/update-external.yml）相当。
 #
-# codex-review-self.yml との違い（意図的）: 呼び出し先を SHA ではなく同一コミットを指す
+# ai-review-self.yml との違い（意図的）: 呼び出し先を @latest ではなく同一コミットを指す
 # 相対参照 `./.github/workflows/update-external.yml` にしている。理由は 2 つ。
 #
 #   1. ブートストラップ: 本 wrapper と reusable 本体は同一 PR で導入されるため、
