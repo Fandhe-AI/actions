@@ -1,0 +1,48 @@
+# 自リポジトリの PR へ ai-review を適用する wrapper（旧 codex-review-self.yml からの移行）。
+#
+# `.github/workflows/ai-review.yml` は reusable 定義本体（`on: workflow_call`）で
+# あり、そのままでは本リポジトリ自身の PR にレビューが走らない。そのため、他の
+# 呼び出し側リポジトリと同じ薄い wrapper を別ファイル名で追加して自己適用する。
+# 内容は単一 provider テンプレート（ai-review/templates/ai-review.single.yml）相当。
+#
+# 有効化のスイッチは呼び出し先 reusable workflow の fail-closed ガードに従う:
+# Actions variable `CODEX_HOME_DIR` が未設定の間は review / post_feedback が skip される
+# （runner 側の準備が済むまでレビューは実行されない）。
+name: AI PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# reusable workflow のトップレベル concurrency は機能しないため呼び出し側で設定する
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ジョブ ID が check 名の先頭になる（codex / preflight・codex / review・codex / post_feedback）。
+  # ruleset の required status checks はこの 3 つを登録する（preflight の失敗時は後続が
+  # skipped になり、skipped は required check を満たすため preflight も必ず required にする）
+  codex:
+    # 呼び出し先は可変タグ @latest（main へ自動追従）で参照する
+    uses: Fandhe-AI/actions/.github/workflows/ai-review.yml@latest
+    permissions:
+      contents: read
+      pull-requests: write
+    # review ジョブは runner 既定値（provider と同名の用途ラベル codex）のまま、public
+    # リポジトリでも self-hosted な codex 専用 runner を使う。これは組織 runner 方針で
+    # 認められた例外であり、fork PR では workflow 側が fail-closed で実行を拒否する。
+    # preflight / post_feedback は資格情報に触れず、public リポジトリでは既定で
+    # ubuntu-latest になる（docs/runner-policy.md「3. 例外: ai-review（旧 codex-review）」）。
+    with:
+      provider: codex
+      # update-external.yml が生成する日次同期 PR は上流の取り込みそのもので、
+      # AI の指摘があってもこの PR では直せない（修正先は取り込み元の上流リポジトリ）。
+      # 判定はブランチ名の接頭辞のみで行うため、push できる主体は該当接頭辞の
+      # ブランチで gate を回避できる（受容済み残留リスク。詳細は ai-review/README.md）。
+      # 接頭辞は自動生成 PR 専用の十分に限定的な値にする（区切り文字の "-" まで含める）。
+      skip-branch-prefixes: chore/skills-update-,chore/submodule-update-

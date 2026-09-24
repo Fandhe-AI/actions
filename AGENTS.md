@@ -3,8 +3,8 @@
 ## 文書の位置づけ
 
 本リポジトリで作業するすべての AI エージェント・人間レビュアーが共通で用いるレビュー観点集。
-Codex による PR 自動レビュー（`.github/workflows/codex-review-self.yml`。本リポジトリ自身の
-codex-review reusable workflow を呼び出す self wrapper）は、PR の base コミットの本ファイルを
+AI による PR 自動レビュー（`.github/workflows/ai-review-self.yml`。本リポジトリ自身の
+ai-review reusable workflow を呼び出す self wrapper）は、PR の base コミットの本ファイルを
 レビュー基準として読む。運用ガイドの正は `CLAUDE.md`、実装規約の詳細は `.claude/rules/`
 （`coding-actions.md` / `security.md`）と `docs/`（`runner-policy.md`）・
 `ai-review/docs/`（`runner-exception.md`）を参照し、本書は重複させずレビュー判定基準に絞る。
