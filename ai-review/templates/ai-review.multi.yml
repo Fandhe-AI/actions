@@ -10,6 +10,11 @@
 # 各ジョブは資格情報（Actions variable / secret）が未設定の間は skip されるので、
 # 使わない reviewer のジョブは残したままでも害はない（不要なら削除してよい）。
 # レート枠・API 課金は reviewer の数だけ消費される点に注意。
+#
+# 自動生成 PR（日次同期 PR 等）をレビュー対象外にする場合は、全 reviewer ジョブの with: に
+# 同じ値の skip-branch-prefixes を追加する（例 "chore/skills-update-,chore/submodule-update-"）。
+# push できる主体はブランチ名で gate を回避できる（受容済み残留リスク。ai-review/README.md
+# 参照。第三者の write コラボレーターがいる場合は指定しない）。
 name: AI PR review
 
 on:
@@ -118,7 +123,9 @@ jobs:
   # - いずれかの reviewer ジョブが success / skipped 以外（ブロック対象の指摘・レビュー未完了・
   #   実行エラー）なら失敗する
   # - 実際にレビューした reviewer（outputs.reviewed == true）が MIN_REVIEWERS 未満なら失敗する
-  #   （資格情報の設定漏れで全 reviewer が skip したまま green になる fail-open を防ぐ）
+  #   （資格情報の設定漏れで全 reviewer が skip したまま green になる fail-open を防ぐ）。
+  #   ただし全 reviewer の skip 理由が branch-prefix（skip-branch-prefixes に一致）の場合に
+  #   限り通す（判定不能・一部だけ一致は通さない）
   # needs と env の列挙は上の reviewer ジョブと揃えること。
   ai-review-gate:
     if: always()
@@ -158,6 +165,8 @@ jobs:
           set -euo pipefail
           failed=0
           reviewed=0
+          total=0
+          prefix_skipped=0
           {
             echo "## AI レビュー集約"
             echo
@@ -175,11 +184,17 @@ jobs:
               success|skipped) ;;
               *) failed=$((failed + 1)) ;;
             esac
+            total=$((total + 1))
             if [ "${done_flag}" = true ]; then reviewed=$((reviewed + 1)); fi
+            if [ "${reason}" = branch-prefix ]; then prefix_skipped=$((prefix_skipped + 1)); fi
           done
           if [ "${failed}" -gt 0 ]; then
             echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー。各ジョブと PR レビューを参照）"
             exit 1
+          fi
+          if [ "${reviewed}" -eq 0 ] && [ "${prefix_skipped}" -eq "${total}" ]; then
+            echo "全 reviewer が skip-branch-prefixes に一致したためレビュー対象外（集約 gate 通過）"
+            exit 0
           fi
           if [ "${reviewed}" -lt "${MIN_REVIEWERS}" ]; then
             echo "::error::実際にレビューした reviewer が ${reviewed} 件で、MIN_REVIEWERS（${MIN_REVIEWERS}）に届きません（資格情報の設定漏れ・fork PR 等で全 reviewer が skip された）"

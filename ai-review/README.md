@@ -195,7 +195,8 @@ required にする運用のどちらかを選ぶ。
   `blocking-count`、`result-artifact`
 - `ai-review-gate` は `MIN_REVIEWERS`（既定 1）未満しかレビューが実行されなかった場合に
   失敗する（資格情報の設定漏れで全 reviewer が skip されたまま green になる fail-open を
-  防ぐ）。fork PR を
+  防ぐ）。ただし全 reviewer の `skip-reason` が `branch-prefix`（`skip-branch-prefixes` に
+  一致）の場合に限り通す（`skip-branch-prefixes` は全 reviewer ジョブに同じ値を渡す）。fork PR を
   受け付ける public リポジトリで本ジョブを required にする場合は、fork PR では全 reviewer が
   起動しないため `MIN_REVIEWERS` の扱いを branch protection 側で設計すること
 - 同じ provider を複数ジョブ（例: local LLM 2 モデル）で使う場合は `reviewer-id` を必ず
@@ -225,6 +226,7 @@ required にする運用のどちらかを選ぶ。
 | `prompt-path` | - | `.github/ai-review/prompts/review.md` | 呼び出し側リポジトリのレビュー prompt パス（英数字と `. _ / -` のみのリポジトリ相対パス。絶対パス・`..`・`.`・空セグメント・末尾 `/`・先頭 `-` は拒否） |
 | `schema-path` | - | `.github/ai-review/review-schema.json` | 呼び出し側リポジトリの出力 schema パス（制約は `prompt-path` と同じ） |
 | `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り）。P0/P1 は必須集合（除外不可） |
+| `skip-branch-prefixes` | - | （空） | レビューを skip する head branch 名の接頭辞（カンマ区切り。例 `chore/skills-update-,chore/submodule-update-`）。`update-external.yml` の日次同期 PR のような自動生成 PR 用。`preflight` がリテラルの前方一致のみで判定し、一致時は `review` / `post_feedback` を実行しない（`skip-reason: branch-prefix`）。push できる主体はブランチ名で gate を回避できる（後述「受容済み残留リスク」）。接頭辞は自動生成 PR だけが使う十分に限定的な値にする（区切り文字 `-` まで含める） |
 
 ### Secrets
 
@@ -240,7 +242,7 @@ required にする運用のどちらかを選ぶ。
 | `blocking-count` | ブロック対象 priority の指摘件数（gate 未到達・skip 時は空） |
 | `reviewer-id` | 解決済みの reviewer-id |
 | `reviewed` | レビューが実行され結果が出たか（`"true"` / `"false"`） |
-| `skip-reason` | skip の理由（`not-configured` / 空） |
+| `skip-reason` | skip の理由（`not-configured` / `branch-prefix` / 空） |
 
 ## 参照バージョン（`@latest`）
 
@@ -261,8 +263,8 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
    | `runner-label` | `runner` | |
    | `post-feedback-runner-label` | `post-feedback-runner` | |
    | `codex-version` | `cli-version` | |
-   | `model` / `reasoning-effort` / `timeout-minutes` / `block-priorities` | 同名 | |
-   | `skip-branch-prefixes` | （導入予定） | 受容判断は後述「`skip-branch-prefixes` の受容済み残留リスク」に記載済みで、実装は後続 PR で行う。実装までの間に移行すると該当ブランチの PR もレビュー対象になる |
+   | `model` / `reasoning-effort` / `timeout-minutes` / `block-priorities` / `skip-branch-prefixes` | 同名 | |
+   | `skip-sync-pr-review`（旧入力） | `skip-branch-prefixes: chore/skills-update-,chore/submodule-update-` | codex-review でも現在は存在しない入力。残っている wrapper は置き換える |
    | `prompt-path` / `schema-path` | 同名 | 既定パスが `.github/codex/...` から `.github/ai-review/...` へ変わる。カスタム版を置いている場合は移動するか、`prompt-path` / `schema-path` で旧パスを明示する |
 
    加えて `provider: codex` を指定する（codex-review には無かった必須入力）。

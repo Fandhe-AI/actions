@@ -175,6 +175,15 @@ on:
         type: string
         required: false
         default: "P0,P1"
+      skip-branch-prefixes:
+        description: >-
+          レビューを skip する head branch 名の接頭辞（カンマ区切り。例
+          "chore/skills-update-,chore/submodule-update-"）。自動生成 PR 用。判定は接頭辞の
+          リテラル前方一致のみで、push できる主体はブランチ名で gate を回避できる（受容済み
+          残留リスク。ai-review/README.md 参照）。既定は空（全 PR をレビュー）
+        type: string
+        required: false
+        default: ""
     secrets:
       API_KEY:
         description: >-
@@ -196,13 +205,13 @@ on:
         value: ${{ jobs.preflight.outputs.reviewer-id }}
       reviewed:
         description: >-
-          レビューが実行され結果が出たか（"true" / "false"）。資格情報未設定で
+          レビューが実行され結果が出たか（"true" / "false"）。資格情報未設定・skip 接頭辞一致で
           skip した場合は "false"（呼び出し側ジョブの result は success になるため、集約 gate は
           こちらで「実際にレビューしたか」を判定する）
         value: ${{ jobs.review.outputs.result_artifact != '' }}
       skip-reason:
         description: >-
-          skip の理由（not-configured: 資格情報・base URL 未設定 /
+          skip の理由（not-configured: 資格情報・base URL 未設定 / branch-prefix: skip 接頭辞に一致 /
           空: skip していない、または fork PR で preflight 自体が起動していない）
         value: ${{ jobs.preflight.outputs.skip-reason }}
 
@@ -246,6 +255,8 @@ jobs:
           AUTH: ${{ inputs.auth }}
           API_BASE_URL: ${{ inputs.api-base-url }}
           API_RESPONSE_FORMAT: ${{ inputs.api-response-format }}
+          SKIP_PREFIXES: ${{ inputs.skip-branch-prefixes }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           VAR_CODEX_HOME_DIR: ${{ vars.CODEX_HOME_DIR }}
           VAR_CLAUDE_HOME_DIR: ${{ vars.CLAUDE_HOME_DIR }}
           VAR_GEMINI_HOME_DIR: ${{ vars.GEMINI_HOME_DIR }}
@@ -354,6 +365,33 @@ jobs:
             json_schema|json_object|none) ;;
             *) fail "api-response-format input が json_schema / json_object / none のいずれでもありません（値は表示しません）" ;;
           esac
+
+          # skip 判定（head branch 名の接頭辞のみ。受容済み残留リスクは ai-review/README.md
+          # 「skip-branch-prefixes の受容済み残留リスク」）。入力検証の後に行い、設定ミスは
+          # skip 対象ブランチでも顕在化させる。有効化判定より前に行い、資格情報の有無に
+          # かかわらず skip-reason を branch-prefix にそろえる（集約 gate の判定用）
+          prefixes=()
+          while IFS= read -r p; do
+            p="${p#"${p%%[![:space:]]*}"}"
+            p="${p%"${p##*[![:space:]]}"}"
+            if [ -n "${p}" ]; then
+              prefixes+=("${p}")
+            fi
+          done < <(printf '%s\n' "${SKIP_PREFIXES}" | tr ',' '\n')
+          if [ -n "${HEAD_REF}" ]; then
+            # 空配列でも set -u で落ちないよう展開する（macOS 標準の bash 3.2 対策）
+            for prefix in ${prefixes[@]+"${prefixes[@]}"}; do
+              # 接頭辞内の * や ? をパターンとして解釈させない（クォートでリテラル比較）
+              case "${HEAD_REF}" in
+                "${prefix}"*)
+                  out run false
+                  out skip-reason branch-prefix
+                  echo "::notice::head branch が skip-branch-prefixes に一致したためレビューを skip します（受容済み残留リスク。ai-review/README.md）"
+                  exit 0
+                  ;;
+              esac
+            done
+          fi
 
           # 有効化判定（資格情報の有無）。未設定は skip（fail-closed な有効化スイッチ）
           auth_mode=none
