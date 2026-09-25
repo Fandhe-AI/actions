@@ -14,7 +14,7 @@ provider は 2 方式に分かれる。
 
 | provider | 方式 | 実行 | 読み取り専用の担保 | schema 強制 | 既定 runner | 既定 model | 認証 |
 |---|---|---|---|---|---|---|---|
-| `codex` | agentic | CLI 0.153.4 | `codex exec --sandbox read-only`（bubblewrap） | `--output-schema` | `codex`（用途ラベル） | `gpt-5.6-sol`（effort `low`） | home-dir（`CODEX_HOME`、変数 `CODEX_HOME_DIR`）または API_KEY（OpenAI、`CODEX_API_KEY` として渡す） |
+| `codex` | agentic | CLI 0.157.0 | `codex exec --sandbox read-only`（bubblewrap） | `--output-schema` | `codex`（用途ラベル） | `gpt-6-sol`（effort `low`） | home-dir（`CODEX_HOME`、変数 `CODEX_HOME_DIR`）または API_KEY（OpenAI、`CODEX_API_KEY` として渡す） |
 | `claude` | agentic | CLI 2.1.280 | `claude -p --restricted --safe-mode --tools Read,Grep,Glob --permission-mode dontAsk` | `--json-schema` | `claude`（用途ラベル） | `claude-sonnet-5` | home-dir（`CLAUDE_CONFIG_DIR`、変数 `CLAUDE_HOME_DIR`）または API_KEY（Anthropic API キー → `ANTHROPIC_API_KEY`、`claude setup-token` の OAuth トークン `sk-ant-oat…` → `CLAUDE_CODE_OAUTH_TOKEN`） |
 | `gemini` | agentic | CLI 0.60.0 | `gemini -p -o json --approval-mode plan --admin-policy`（読み取り系ツール以外を全拒否。Web 検索・取得も拒否） | 非対応。指示文 + `normalize-output.mjs` で検証 | `gemini`（用途ラベル） | CLI 既定（自動ルーティング） | home-dir（`GEMINI_CLI_HOME`、変数 `GEMINI_HOME_DIR`）または API_KEY（`GEMINI_API_KEY`） |
 | `grok` | api | xAI API（OpenAI 互換 `https://api.x.ai/v1`） | ツール自体を渡さない | `response_format: json_schema`（strict） | private: self-hosted / public: `ubuntu-latest` | 必須（`model` 入力） | API_KEY 必須（xAI API キー） |
@@ -214,9 +214,9 @@ required にする運用のどちらかを選ぶ。
 | `reviewer-name` | - | （空。Codex/Claude/Gemini/Grok/LLM） | PR レビュー見出しの表示名 |
 | `runner` | - | （空 → 既定ロジック） | review ジョブの runner。単一ラベルまたは JSON 配列 |
 | `post-feedback-runner` | - | （空 → 既定ロジック） | preflight / post_feedback の runner。単一ラベルまたは JSON 配列 |
-| `model` | - | （空。codex: `gpt-5.6-sol` / claude: `claude-sonnet-5` / gemini: CLI 既定） | モデル名。grok / openai-compatible では必須 |
+| `model` | - | （空。codex: `gpt-6-sol` / claude: `claude-sonnet-5` / gemini: CLI 既定） | モデル名。grok / openai-compatible では必須。codex の `gpt-6-sol` は CLI 0.156.1 以降が必要（`cli-version` を下げる場合は `model` も合わせる） |
 | `reasoning-effort` | - | （空。codex のみ `low` を既定適用） | 推論量。codex: `low`〜`ultra` / claude: `low`〜`max` / API provider: `minimal`〜`max`（`reasoning_effort` として送信）。`"default"` でモデル既定に従う。gemini は非対応 |
-| `cli-version` | - | （空。codex: `0.153.4` / claude: `2.1.280` / gemini: `0.60.0`） | agentic provider の CLI 固定バージョン（`latest` 不可） |
+| `cli-version` | - | （空。codex: `0.157.0` / claude: `2.1.280` / gemini: `0.60.0`） | agentic provider の CLI 固定バージョン（`latest` 不可） |
 | `auth` | - | `auto` | 認証方式。`auto` / `home-dir` / `api-key` |
 | `api-base-url` | - | （空） | openai-compatible の OpenAI 互換 base URL。Actions variable `AI_REVIEW_API_BASE_URLS`（カンマ区切りの許可リスト）のいずれかと完全一致が必要（不一致は失敗、許可リスト未設定・空は skip）。grok は `https://api.x.ai/v1` 固定で指定不可 |
 | `api-response-format` | - | `json_schema` | `json_schema` / `json_object` / `none` |
