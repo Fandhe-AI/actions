@@ -97,7 +97,7 @@ on:
         default: ""
       model:
         description: >-
-          モデル名。既定 codex: gpt-5.6-sol / claude: claude-sonnet-5 / gemini: CLI の既定
+          モデル名。既定 codex: gpt-6-sol / claude: claude-sonnet-5 / gemini: CLI の既定
           （自動ルーティング）。grok / openai-compatible では必須
         type: string
         required: false
@@ -112,7 +112,7 @@ on:
         default: ""
       cli-version:
         description: >-
-          agentic provider の CLI 固定バージョン（latest 不可）。既定 codex: 0.153.4 /
+          agentic provider の CLI 固定バージョン（latest 不可）。既定 codex: 0.157.0 /
           claude: 2.1.280 / gemini: 0.60.0
         type: string
         required: false
@@ -309,7 +309,8 @@ jobs:
           fi
 
           case "${PROVIDER}" in
-            codex) def_model=gpt-5.6-sol ;;
+            # gpt-6-sol は codex CLI 0.156.1 以降で利用可（def_version と揃えて上げる）
+            codex) def_model=gpt-6-sol ;;
             claude) def_model=claude-sonnet-5 ;;
             *) def_model="" ;;
           esac
@@ -326,7 +327,8 @@ jobs:
           effort="${EFFORT}"
           if [ -z "${effort}" ] && [ "${PROVIDER}" = codex ]; then
             # codex は gpt-6-astra 時代に ChatGPT Pro の共有 quota が上限に達した経緯から
-            # low を明示固定する（codex-review.yml と同じ既定）
+            # low を明示固定する（codex-review.yml と同じ既定。既定 model の gpt-6-sol は
+            # サーバー既定が medium のため、省略すると消費が増える）
             effort=low
           fi
           if [ "${effort}" = default ]; then
@@ -345,7 +347,7 @@ jobs:
           cli_version=""
           if [ "${mode}" = agentic ]; then
             case "${PROVIDER}" in
-              codex) def_version=0.153.4 ;;
+              codex) def_version=0.157.0 ;;
               claude) def_version=2.1.280 ;;
               gemini) def_version=0.60.0 ;;
             esac
