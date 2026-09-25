@@ -358,10 +358,13 @@ jobs:
             [[ "${cli_version}" =~ ${version_re} ]] || fail "cli-version input は固定の semver で指定してください（latest 不可。値は表示しません）"
             # gpt-6-sol（codex の既定 model）は codex CLI 0.156.1 以降が必要。cli-version だけを
             # 古い版へ固定した呼び出し側が codex exec の実行時まで気づかないよう、ここで止める
-            # （10# は先頭ゼロの版を 8 進数と解釈させないため）
+            # （10# は先頭ゼロの版を 8 進数と解釈させないため。SemVer では prerelease は同じ版の
+            # 正式版より前なので、0.156.1-xxx は 0.156.1 未満として拒否する）
             if [ "${PROVIDER}" = codex ] && [ "${model}" = gpt-6-sol ]; then
               IFS=. read -r v_major v_minor v_patch <<<"${cli_version%%-*}"
-              if (( 10#${v_major} == 0 && (10#${v_minor} < 156 || (10#${v_minor} == 156 && 10#${v_patch} < 1)) )); then
+              v_pre=0
+              [[ "${cli_version}" == *-* ]] && v_pre=1
+              if (( 10#${v_major} == 0 && (10#${v_minor} < 156 || (10#${v_minor} == 156 && (10#${v_patch} < 1 || (10#${v_patch} == 1 && v_pre == 1)))) )); then
                 fail "model gpt-6-sol は codex CLI 0.156.1 以降が必要です（cli-version を 0.156.1 以上にするか、model を明示してください）"
               fi
             fi
