@@ -113,6 +113,17 @@ on:
         type: boolean
         required: false
         default: true
+      submodule-force-checkout:
+        description: >
+          .gitmodules の update = none（rebase / merge を含む）を上書きし、checkout で
+          submodule を更新するか。update = none を宣言しているが自動更新はしたい
+          リポジトリだけ true にする。既定 false は従来と同一の挙動。
+          update = none を「自動更新から外す（pin 固定）」目的で使っているリポジトリでは
+          true にしない（submodule-path を絞らないため update = none の submodule が
+          すべて更新対象になる）。
+        type: boolean
+        required: false
+        default: false
       enable-skills:
         description: 'エージェントスキル更新ジョブを有効にするか'
         type: boolean
@@ -471,6 +482,9 @@ jobs:
           # 起動された場合でも常に同じブランチを checkout し、他ブランチのツリー混入を防ぐ。
           # 上の Detect .gitmodules の ref と一致させること。
           ref: ${{ inputs.base-branch }}
+          # update = none の submodule は、この checkout 時点では取得されない。
+          # submodule-force-checkout: true のときは composite action 側の
+          # Initialize submodules が取得する。
           submodules: recursive
           fetch-depth: 0
           token: ${{ secrets.SUBMODULE_PAT }}
@@ -504,6 +518,11 @@ jobs:
           # これは呼び出し側で上書きできない固定値とする（fail-open を各リポジトリの
           # 設定ミスで復活させないため）。
           auto-merge-immediate-fallback: 'false'
+          # .gitmodules の update = none を上書きするか（boolean は 'true' / 'false' の
+          # 文字列に展開される）。入力名は submodule-update/action.yml の force-checkout
+          # と一致を確認済み（未知の input は警告のみで素通りするため綴りに注意）。
+          # composite 側で env 受け・値域検証される。既定 false は従来と同一。
+          force-checkout: ${{ inputs.submodule-force-checkout }}
 
       - name: Close superseded update PRs
         # 日次で {prefix}-{YYYYMMDD} の新ブランチを作り直す設計のため、マージされずに
