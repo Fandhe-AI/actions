@@ -132,10 +132,17 @@ runs:
       shell: bash
       env:
         FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
+        SUBMODULE_PATH: ${{ inputs.submodule-path }}
       run: |
+        set -euo pipefail
         git submodule sync --recursive
         if [ "$FORCE_CHECKOUT" = "true" ]; then
-          git submodule update --init --recursive --checkout
+          # submodule-path 指定時は対象のみ init する (update = none の兄弟 submodule を clone しない)
+          if [ -n "$SUBMODULE_PATH" ]; then
+            git submodule update --init --recursive --checkout -- "$SUBMODULE_PATH"
+          else
+            git submodule update --init --recursive --checkout
+          fi
         else
           git submodule update --init --recursive
         fi

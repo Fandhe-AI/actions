@@ -157,7 +157,7 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 | `branch-prefix` | No | `chore/submodule-update` | 自動生成するブランチ名の prefix。最終ブランチ名は `{prefix}-{YYYYMMDD}` (UTC) |
 | `submodule-path` | No | `` (全 submodule) | 更新対象の submodule パス |
 | `submodule-branch` | No | `` (`.gitmodules` 準拠) | submodule で追従するブランチ名。指定時は対象 submodule の `.gitmodules` 設定を一時的に上書き |
-| `force-checkout` | No | `false` | `.gitmodules` の `update`（none / rebase / merge）を上書きし checkout で更新する。`git submodule update` の 2 か所（init と update）に `--checkout` が付く。`true` / `false` のみ（大文字小文字・前後空白は無視）。空文字を含むそれ以外の値は `::error::` で失敗する |
+| `force-checkout` | No | `false` | `.gitmodules` の `update`（none / rebase / merge）を上書きし checkout で更新する。`git submodule update` の 2 か所（init と update）に `--checkout` が付き、`submodule-path` 指定時は init も対象パスのみに限定される。`true` / `false` のみ（大文字小文字・前後空白は無視）。空文字を含むそれ以外の値は `::error::` で失敗する |
 | `commit-message` | No | `chore: submodule を最新に更新` | コミットメッセージ |
 | `pr-title` | No | `chore: submodule を最新に更新` | PR タイトル |
 | `pr-body` | No | 自動生成 | PR 本文。空時は変更サマリを自動挿入 |
