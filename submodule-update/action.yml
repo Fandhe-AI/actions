@@ -26,6 +26,14 @@ inputs:
     description: 'submodule で追従するブランチ名。指定時は対象 submodule の .gitmodules 設定を一時的に上書き'
     required: false
     default: ''
+  force-checkout:
+    description: >-
+      .gitmodules の update (none / rebase / merge) を上書きし、checkout で更新する
+      (git submodule update に --checkout を付ける)。update = none の submodule も
+      更新対象になる。'true' / 'false' のみ受け付け (大文字小文字・前後空白は無視)、
+      空文字を含むそれ以外は fail-closed で失敗する。
+    required: false
+    default: 'false'
   commit-message:
     description: 'コミットメッセージ (Conventional Commits)'
     required: false
@@ -99,11 +107,38 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate force-checkout
+      id: validate
+      shell: bash
+      env:
+        INPUT_FORCE_CHECKOUT: ${{ inputs.force-checkout }}
+      run: |
+        set -euo pipefail
+        # 誤記が黙って「無効」に読み替えられると update = none の症状が再発するため、
+        # true / false 以外は fail-closed。入力値は workflow command 注入防止のため出力しない。
+        v="$(printf '%s' "${INPUT_FORCE_CHECKOUT:-}" \
+          | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$v" in
+          true | false)
+            echo "force_checkout=$v" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "::error::force-checkout の値が不正です。'true' / 'false' のいずれかを指定してください。"
+            exit 1
+            ;;
+        esac
+
     - name: Initialize submodules
       shell: bash
+      env:
+        FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
       run: |
         git submodule sync --recursive
-        git submodule update --init --recursive
+        if [ "$FORCE_CHECKOUT" = "true" ]; then
+          git submodule update --init --recursive --checkout
+        else
+          git submodule update --init --recursive
+        fi
 
     - name: Capture pre-update state
       id: pre
@@ -151,9 +186,16 @@ runs:
       shell: bash
       env:
         SUBMODULE_PATH: ${{ inputs.submodule-path }}
+        FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
       run: |
         set -euo pipefail
-        if [ -n "$SUBMODULE_PATH" ]; then
+        if [ "$FORCE_CHECKOUT" = "true" ]; then
+          if [ -n "$SUBMODULE_PATH" ]; then
+            git submodule update --remote --recursive --checkout -- "$SUBMODULE_PATH"
+          else
+            git submodule update --remote --recursive --checkout
+          fi
+        elif [ -n "$SUBMODULE_PATH" ]; then
           git submodule update --remote --recursive -- "$SUBMODULE_PATH"
         else
           git submodule update --remote --recursive

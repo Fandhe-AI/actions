@@ -71,6 +71,20 @@ jobs:
     base-branch: main
 ```
 
+#### 例3b: `update = none` の submodule を更新（`force-checkout`）
+
+`.gitmodules` に `update = none` が設定された submodule は、通常 `git submodule update` が
+skip するため gitlink が進まず PR も作られない。`force-checkout: 'true'` で `--checkout` を付け、
+`update` 設定を上書きして更新する。
+
+```yaml
+- uses: Fandhe-AI/actions/submodule-update@latest
+  with:
+    token: ${{ secrets.SUBMODULE_PAT }}
+    submodule-path: docs/spec
+    force-checkout: 'true'
+```
+
 #### 例4: 自動マージを有効化（`vars` で制御）
 
 PR 作成後、条件を満たせば自動的にマージできます。ON/OFF と allowlist は repository
@@ -143,6 +157,7 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 | `branch-prefix` | No | `chore/submodule-update` | 自動生成するブランチ名の prefix。最終ブランチ名は `{prefix}-{YYYYMMDD}` (UTC) |
 | `submodule-path` | No | `` (全 submodule) | 更新対象の submodule パス |
 | `submodule-branch` | No | `` (`.gitmodules` 準拠) | submodule で追従するブランチ名。指定時は対象 submodule の `.gitmodules` 設定を一時的に上書き |
+| `force-checkout` | No | `false` | `.gitmodules` の `update`（none / rebase / merge）を上書きし checkout で更新する。`git submodule update` の 2 か所（init と update）に `--checkout` が付く。`true` / `false` のみ（大文字小文字・前後空白は無視）。空文字を含むそれ以外の値は `::error::` で失敗する |
 | `commit-message` | No | `chore: submodule を最新に更新` | コミットメッセージ |
 | `pr-title` | No | `chore: submodule を最新に更新` | PR タイトル |
 | `pr-body` | No | 自動生成 | PR 本文。空時は変更サマリを自動挿入 |
@@ -194,6 +209,8 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 
 - ブランチ名は `{branch-prefix}-{YYYYMMDD}` 形式で **自動生成** (UTC 日付)。同日中の再実行では `--force-with-lease` で既存ブランチを上書きし、既存 PR を更新します。日をまたぐと新しい PR が起票されます
 - `submodule-branch` は `.gitmodules` の `branch` 設定を **ワークフロー実行中のみ一時的に上書き** します。`.gitmodules` 自体は PR にコミットされません (`.gitmodules` の永続変更が必要な場合は別途手動コミットしてください)
+- `force-checkout: 'true'` で `submodule-path` を指定しない場合、`update = none` の submodule が **すべて** 更新対象になります
+- `update = none` を「自動更新から外す（pin 固定）」目的で使っているリポジトリでは `force-checkout` を有効にしないでください
 - private submodule を含む場合は `GITHUB_TOKEN` では不足するため、fine-grained PAT が必要です (`actions/checkout` と本 Action の両方に同じトークンを渡してください)
 - `base-branch` に branch protection がある場合、PR マージには追加のレビュー設定が必要
 - 同名ブランチに人間が直接 push している場合、`--force-with-lease` が失敗する可能性があります。自動更新専用のブランチ prefix を維持してください
