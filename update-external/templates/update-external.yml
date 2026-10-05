@@ -57,6 +57,11 @@ jobs:
       # pin 固定していて自動更新したくないリポジトリだけ false にする。
       # enable-submodule: false
 
+      # .gitmodules で update = none を宣言しているが、自動更新はしたい場合だけ true にする。
+      # 既定 false は従来どおり。pin 固定の目的で update = none を使っている場合は
+      # 有効にしない（update = none の submodule がすべて更新対象になる）。
+      # submodule-force-checkout: true
+
       # スキル更新ジョブの要否。.agents/skills を持たないリポジトリは false にする。
       # enable-skills: false
 

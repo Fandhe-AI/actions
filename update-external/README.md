@@ -44,6 +44,7 @@ reusable 化により、下流が持つのは wrapper 1 ファイルだけにな
 | `runner-json` | `'"ubuntu-latest"'` | `runs-on` へ渡す **JSON リテラル**。単一ラベルは `'"ubuntu-latest"'`、複数ラベルは `'["self-hosted","Linux"]'`。素の `self-hosted` は JSON として不正で workflow が起動しない |
 | `base-branch` | `main` | 更新対象ブランチ。checkout の `ref`・`.gitmodules` の存在判定・composite action の `base-branch` すべてに同じ値を使う |
 | `enable-submodule` | `true` | submodule 更新ジョブの要否。`.gitmodules` を持つが pin 固定運用で自動更新したくないリポジトリは `false` |
+| `submodule-force-checkout` | `false` | `.gitmodules` の `update = none` を上書きし、checkout で submodule を更新する（composite action `submodule-update` の `force-checkout` へ透過）。boolean 型のため値域検証ジョブは不要。`submodule-path` を指定しないため `update = none` の submodule がすべて対象になる。`update = none` を pin 固定の目的で使っているリポジトリでは `true` にしない |
 | `enable-skills` | `true` | スキル更新ジョブの要否 |
 | `submodule-auto-merge` | `'false'` | submodule 更新 PR の auto-merge（`'true'` / `'false'` の文字列）。値域外は `validate-inputs` ジョブが fail-closed で失敗させる（`'yes'` 等が composite action へ素通りして auto-merge が意図せず有効になる fail-open を塞ぐ）。組織変数へ `True` / `1` を入れている場合は `true` / `false` へ直す |
 | `submodule-auto-merge-allowlist` | `''` | 同 allowlist |
@@ -141,6 +142,7 @@ fail-open の抑止はリポジトリ固有の事情ではなく、集中管理�
 |------|------|---------|
 | runner | `rust-ai-library` は public 化に伴い `ubuntu-latest`、`yadori` は `self-hosted` | `runner-json` |
 | submodule 更新の要否 | `yadori` は `.gitmodules` を持つが submodule ジョブを持たない | `enable-submodule` |
+| `update = none` を宣言しているが自動更新したい | submodule の gitlink が進まず PR も作られない | `submodule-force-checkout` |
 | `.gitmodules` を持たない | `actions` 本体 | 存在判定ステップが自動 skip（設定不要） |
 | auto-merge の ON/OFF | 組織変数で集中管理 | `submodule-auto-merge` / `skills-auto-merge` |
 
