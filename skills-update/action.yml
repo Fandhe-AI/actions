@@ -376,7 +376,11 @@ runs:
         # base からのスキル差分以外の無関係なコミットが混入しないようにするため、
         # skills update の作業ツリー変更 (未追跡含む) を stash で退避し、origin の
         # base-branch を起点に新ブランチを作ってから再適用する。
-        git fetch origin "$BASE_BRANCH"
+        # --no-recurse-submodules: skills-update はスキルファイルしか扱わない。取得した
+        # コミットが gitlink を変更していると既定 (fetch.recurseSubmodules=on-demand) で
+        # submodule の fetch が走り、資格情報の無い private submodule で失敗する。
+        # persist-credentials: false の境界は緩めない (Issue #158)。
+        git fetch --no-recurse-submodules origin "$BASE_BRANCH"
         git stash push --include-untracked -m skills-update
         git checkout -B "$BRANCH_NAME" "origin/$BASE_BRANCH"
         # base 上にスキル更新を再適用。スキルファイルは通常 base と衝突しないが、
@@ -419,7 +423,9 @@ runs:
         # リモート側の既存ブランチに対する remote-tracking ref が存在しない。
         # --force-with-lease を機能させるため、push 前に明示的に fetch する
         # (初回実行ではリモートに存在しないので失敗しても無視)。
-        git fetch origin "$BRANCH_NAME" 2>/dev/null || true
+        # submodule の再帰 fetch で失敗すると ref が欠けるため --no-recurse-submodules を付ける
+        # (理由は上の base fetch と同じ。Issue #158)。
+        git fetch --no-recurse-submodules origin "$BRANCH_NAME" 2>/dev/null || true
         git push --force-with-lease origin "$BRANCH_NAME"
 
     - name: Create or update PR
