@@ -212,6 +212,7 @@ repository variables（Settings → Secrets and variables → Actions → Variab
 - `force-checkout: 'true'` で `submodule-path` を指定しない場合、`update = none` の submodule が **すべて** 更新対象になります
 - `update = none` を「自動更新から外す（pin 固定）」目的で使っているリポジトリでは `force-checkout` を有効にしないでください
 - private submodule を含む場合は `GITHUB_TOKEN` では不足するため、fine-grained PAT が必要です (`actions/checkout` と本 Action の両方に同じトークンを渡してください)
+- `force-checkout: 'true'` のとき、submodule の init / update は本 Action の `token` で github.com へ認証します。`update = none` の submodule は `actions/checkout` が取得しないうえ、checkout（v6）が保存する資格情報は親リポジトリの gitdir にしか効かないため、checkout の資格情報だけでは private submodule の clone が `could not read Username` で失敗するからです。認証ヘッダーは `GIT_CONFIG_COUNT` 系の環境変数で該当ステップ内にだけ渡し、github.com 向けの既存 `http.extraheader`（stale な global 値を含む）はそのステップ内でリセットされます。`token` には submodule リポジトリの `contents: read` も必要です
 - `base-branch` に branch protection がある場合、PR マージには追加のレビュー設定が必要
 - 同名ブランチに人間が直接 push している場合、`--force-with-lease` が失敗する可能性があります。自動更新専用のブランチ prefix を維持してください
 - **`GITHUB_TOKEN` で作成した PR は後続 workflow（`pull_request` トリガーの CI 等）を発火しません**（GitHub の再帰防止仕様）。このため `token: ${{ secrets.GITHUB_TOKEN }}` のまま `auto-merge` を使うと、(1) branch protection で必須ステータスチェックを要求している場合はチェックが永遠に走らず auto-merge した PR がキューに残り続ける、(2) 必須チェックが無い場合は CI 未実行のまま merge される、という不具合が起きます。**生成 PR で CI を走らせたい / 必須チェック付きで auto-merge したい場合は、fine-grained PAT もしくは `actions/create-github-app-token` で発行した GitHub App トークンを渡してください**（例5 参照）。本 Action は `auto-merge` 有効時に `GITHUB_TOKEN`（API ログインが `github-actions[bot]`）を検出すると `::warning::` を出します

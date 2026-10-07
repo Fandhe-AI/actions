@@ -130,13 +130,35 @@ runs:
             ;;
         esac
 
+    # force-checkout 時の submodule 認証について（Initialize / Update submodules 共通）:
+    # actions/checkout（v6）は資格情報を `includeIf.gitdir:<親リポの .git>` 経由で
+    # 読ませるため、update = none で checkout がスキップした submodule の新規 clone や、
+    # その submodule 内での fetch（いずれも別の gitdir）には資格情報が届かない。
+    # private submodule では `could not read Username for 'https://github.com'` で失敗する。
+    # そこで force-checkout 時のみ、GIT_CONFIG_COUNT / KEY_n / VALUE_n 環境変数で
+    # 当該ステップ内の git（submodule の子プロセスへも引き継がれる。git v2.31 以降の
+    # prepare_other_repo_env は GIT_CONFIG_COUNT を除去しない）にだけ認証ヘッダーを渡す。
+    # - 先頭の空値で github.com 向け extraheader の累積値（stale な global 値・checkout の
+    #   値）をリセットし、Authorization ヘッダーの重複を防ぐ（rust-toolchain-setup と同じ仕様の利用）
+    # - トークンは argv・ファイル・$GITHUB_ENV に出さず、ステップ終了で環境ごと破棄される
+    # - force-checkout: false（既定）では従来どおり何も注入しない
     - name: Initialize submodules
       shell: bash
       env:
         FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
         SUBMODULE_PATH: ${{ inputs.submodule-path }}
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
+        if [ "$FORCE_CHECKOUT" = "true" ] && [ -n "${GH_TOKEN:-}" ]; then
+          basic_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${basic_auth}"
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'
+          export GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_KEY_1='http.https://github.com/.extraheader'
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic ${basic_auth}"
+        fi
         git submodule sync --recursive
         if [ "$FORCE_CHECKOUT" = "true" ]; then
           # submodule-path 指定時は対象のみ init する (update = none の兄弟 submodule を clone しない)
@@ -196,8 +218,19 @@ runs:
       env:
         SUBMODULE_PATH: ${{ inputs.submodule-path }}
         FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
+        # 認証ヘッダーの注入理由は Initialize submodules の直前のコメントを参照
+        if [ "$FORCE_CHECKOUT" = "true" ] && [ -n "${GH_TOKEN:-}" ]; then
+          basic_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${basic_auth}"
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'
+          export GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_KEY_1='http.https://github.com/.extraheader'
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic ${basic_auth}"
+        fi
         if [ "$FORCE_CHECKOUT" = "true" ]; then
           if [ -n "$SUBMODULE_PATH" ]; then
             git submodule update --remote --recursive --checkout -- "$SUBMODULE_PATH"
