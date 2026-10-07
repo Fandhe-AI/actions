@@ -141,13 +141,13 @@ runs:
     # - 先頭の空値で github.com 向け extraheader の累積値（stale な global 値・checkout の
     #   値）をリセットし、Authorization ヘッダーの重複を防ぐ（rust-toolchain-setup と同じ仕様の利用）
     # - トークンは argv・ファイル・$GITHUB_ENV に出さず、ステップ終了で環境ごと破棄される
-    # - force-checkout: false（既定）では従来どおり何も注入しない
+    # - force-checkout: false（既定）では token をステップの env にも渡さず、従来どおり何も注入しない
     - name: Initialize submodules
       shell: bash
       env:
         FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
         SUBMODULE_PATH: ${{ inputs.submodule-path }}
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ steps.validate.outputs.force_checkout == 'true' && inputs.token || '' }}
       run: |
         set -euo pipefail
         if [ "$FORCE_CHECKOUT" = "true" ] && [ -n "${GH_TOKEN:-}" ]; then
@@ -218,7 +218,7 @@ runs:
       env:
         SUBMODULE_PATH: ${{ inputs.submodule-path }}
         FORCE_CHECKOUT: ${{ steps.validate.outputs.force_checkout }}
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ steps.validate.outputs.force_checkout == 'true' && inputs.token || '' }}
       run: |
         set -euo pipefail
         # 認証ヘッダーの注入理由は Initialize submodules の直前のコメントを参照
