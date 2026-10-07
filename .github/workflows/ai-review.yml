@@ -97,7 +97,7 @@ on:
         default: ""
       model:
         description: >-
-          モデル名。既定 codex: gpt-6-sol / claude: claude-sonnet-5 / gemini: CLI の既定
+          モデル名。既定 codex: gpt-6.1-sol / claude: claude-sonnet-5 / gemini: CLI の既定
           （自動ルーティング）。grok / openai-compatible では必須
         type: string
         required: false
@@ -112,7 +112,7 @@ on:
         default: ""
       cli-version:
         description: >-
-          agentic provider の CLI 固定バージョン（latest 不可）。既定 codex: 0.157.0 /
+          agentic provider の CLI 固定バージョン（latest 不可）。既定 codex: 0.160.1 /
           claude: 2.1.280 / gemini: 0.60.0
         type: string
         required: false
@@ -309,8 +309,8 @@ jobs:
           fi
 
           case "${PROVIDER}" in
-            # gpt-6-sol は codex CLI 0.156.1 以降で利用可（def_version と揃えて上げる）
-            codex) def_model=gpt-6-sol ;;
+            # gpt-6.1-sol は codex CLI 0.159.1 以降で利用可（def_version と揃えて上げる）
+            codex) def_model=gpt-6.1-sol ;;
             claude) def_model=claude-sonnet-5 ;;
             *) def_model="" ;;
           esac
@@ -327,8 +327,9 @@ jobs:
           effort="${EFFORT}"
           if [ -z "${effort}" ] && [ "${PROVIDER}" = codex ]; then
             # codex は gpt-6-astra 時代に ChatGPT Pro の共有 quota が上限に達した経緯から
-            # low を明示固定する（codex-review.yml と同じ既定。既定 model の gpt-6-sol は
-            # サーバー既定が medium のため、省略すると消費が増える）
+            # low を明示固定する（codex-review.yml と同じ既定。既定 model の gpt-6.1-sol は
+            # サーバー既定も low だが、モデル差し替えでサーバー既定が変わっても消費が
+            # 増えないよう既定に依存しない）
             effort=low
           fi
           if [ "${effort}" = default ]; then
@@ -347,7 +348,7 @@ jobs:
           cli_version=""
           if [ "${mode}" = agentic ]; then
             case "${PROVIDER}" in
-              codex) def_version=0.157.0 ;;
+              codex) def_version=0.160.1 ;;
               claude) def_version=2.1.280 ;;
               gemini) def_version=0.60.0 ;;
             esac
@@ -356,16 +357,25 @@ jobs:
             # （資格情報に触れるジョブでのサプライチェーン対策）
             version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
             [[ "${cli_version}" =~ ${version_re} ]] || fail "cli-version input は固定の semver で指定してください（latest 不可。値は表示しません）"
-            # gpt-6-sol（codex の既定 model）は codex CLI 0.156.1 以降が必要。cli-version だけを
-            # 古い版へ固定した呼び出し側が codex exec の実行時まで気づかないよう、ここで止める
-            # （10# は先頭ゼロの版を 8 進数と解釈させないため。SemVer では prerelease は同じ版の
-            # 正式版より前なので、0.156.1-xxx は 0.156.1 未満として拒否する）
-            if [ "${PROVIDER}" = codex ] && [ "${model}" = gpt-6-sol ]; then
+            # gpt-6.1-sol（codex の既定 model）は codex CLI 0.159.1 以降、gpt-6-sol は 0.156.1
+            # 以降が必要。cli-version だけを古い版へ固定した呼び出し側が codex exec の実行時まで
+            # 気づかないよう、ここで止める（10# は先頭ゼロの版を 8 進数と解釈させないため。
+            # SemVer では prerelease は同じ版の正式版より前なので、0.159.1-xxx は 0.159.1 未満
+            # として拒否する）
+            min_version=""
+            if [ "${PROVIDER}" = codex ]; then
+              case "${model}" in
+                gpt-6.1-sol) min_version=0.159.1 ;;
+                gpt-6-sol) min_version=0.156.1 ;;
+              esac
+            fi
+            if [ -n "${min_version}" ]; then
               IFS=. read -r v_major v_minor v_patch <<<"${cli_version%%-*}"
+              IFS=. read -r m_major m_minor m_patch <<<"${min_version}"
               v_pre=0
               [[ "${cli_version}" == *-* ]] && v_pre=1
-              if (( 10#${v_major} == 0 && (10#${v_minor} < 156 || (10#${v_minor} == 156 && (10#${v_patch} < 1 || (10#${v_patch} == 1 && v_pre == 1)))) )); then
-                fail "model gpt-6-sol は codex CLI 0.156.1 以降が必要です（cli-version を 0.156.1 以上にするか、model を明示してください）"
+              if (( 10#${v_major} < m_major || (10#${v_major} == m_major && (10#${v_minor} < m_minor || (10#${v_minor} == m_minor && (10#${v_patch} < m_patch || (10#${v_patch} == m_patch && v_pre == 1))))) )); then
+                fail "model ${model} は codex CLI ${min_version} 以降が必要です（cli-version を ${min_version} 以上にするか、model を明示してください）"
               fi
             fi
           fi
