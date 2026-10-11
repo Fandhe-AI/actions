@@ -36,6 +36,8 @@ paths:
   `cache-save` を渡さないと PR でも保存し、PR の blob は `refs/pull/<N>/merge` スコープに入ってその PR からしか
   読めないのに容量を共有する（fandhe-container の実測では同一キーの blob が main と PR 3 件で 4 重に保存され、
   PR スコープの blob が全体 5.4 GB の約 6 割を占めた）
+  - `github.ref` だけの式は `main` 上の `schedule`・`workflow_dispatch` でも真になる。利用側のワークフローがそれらの
+    イベントでも呼び出し、保存を push に限りたい場合は `${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}` を渡す
 - 入力の既定値を変えると `@latest` の全利用側の挙動が変わる。変える場合は利用側の呼び出しを棚卸しし、ユーザーの判断を得てから行う
 
 ## key 設計を変えるときの互換性
