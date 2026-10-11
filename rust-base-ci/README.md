@@ -19,7 +19,8 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
   （`cargo-deny` の MSRV が呼び出し側の固定チャネルより新しい場合の失敗を避けるため）
 - 使用する外部 action はすべてコミット SHA 固定
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
-  通常不要なため既定は無効。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
+  通常不要なため既定は無効。対象は `clippy` / `test` / `deny` ジョブで、`fmt` ジョブは
+  cache を持たない。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
   設定し incremental 成果物をそもそも生成しない。さらに cargo 実行ステップ直後・
   cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）。
   保存は `cache-save` 入力で止められ、main だけで保存して PR は restore のみにできる
@@ -147,7 +148,7 @@ with:
 | `runner-label` | - | `self-hosted` | 全ジョブを実行する runner ラベル（public は `ubuntu-latest` 等） |
 | `deny-checks` | - | `advisories licenses sources` | `cargo deny check` に渡すチェック名（空白区切り）。`advisories` / `bans` / `licenses` / `sources` のみ許容し、それ以外は fail-closed で拒否 |
 | `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
-| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v4`。key に rustc の版を含み、移行期間は `v3` へフォールバックする。「cache の構成」節参照） |
+| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン。`clippy` / `test` / `deny` が対象で、`fmt` は cache を持たない）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v4`。key に rustc の版を含み、移行期間は `v3` へフォールバックする。「cache の構成」節参照） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
 | `cache-save` | - | `true` | `cache: true` のとき cache を保存するか（`false` で restore のみ）。main だけで保存する場合は `${{ github.ref == 'refs/heads/main' }}` を渡す（「cache の構成」節参照） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
@@ -165,9 +166,15 @@ with:
 
 | ジョブ | 対象パス | key |
 |---|---|---|
-| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v4-<rustc の release>-<commit-hash 先頭 12 桁>-<Cargo.lock hash>`） |
+| `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-v4-<rustc の release>-<commit-hash 先頭 12 桁>-<Cargo.lock hash>` |
 | `deny` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`（`target` は含まない） | `<cache-key-prefix>-<os>-deny-<Cargo.lock hash>` |
 | `deny`（cargo-deny 本体） | `~/.cargo/bin/cargo-deny` | `<cache-key-prefix>-<os>-<arch>-<ImageOS>-cargo-deny-<cargo-deny-version>`（self-hosted で `ImageOS` が無い場合は `unknown`） |
+
+`fmt` ジョブは `cache: true` でも cache を restore・保存しない。`cargo fmt` は
+依存の取得もビルドもせず `~/.cargo/registry`・`target` を作らない。そのため以前の
+`<cache-key-prefix>-<os>-fmt-<Cargo.lock hash>` は restore が毎回 miss し、
+保存は対象パスが無く "Path Validation Error" の警告を出すだけだった
+（`Fandhe-AI/fandhe-db` run 38121631475）。
 
 `clippy` / `test` の key は `v4` で rustc の版（`rustc -vV` の `release` と `commit-hash` の先頭 12 桁）を含む。`rust-toolchain.toml` が
 stable 追従の呼び出し側では runner イメージの更新で rustc が変わる。key に rustc が無いと、旧 rustc の
@@ -206,7 +213,7 @@ key に含めるのは、新しいイメージの glibc でビルドしたバイ
 blob への exact hit が続いて毎回ソースビルドへ戻るのを避けるため。
 
 `restore-keys` は同じ prefix の前方一致。`clippy` / `test` は同じ rustc の `v4` を優先し、移行期間だけ
-`v3` にもフォールバックする（`fmt` / `deny` はバージョンセグメントを持たない）。
+`v3` にもフォールバックする（`deny` はバージョンセグメントを持たない）。
 
 以下は `v3` までの版セグメントの経緯（現行は上記の `v4`）。
 
