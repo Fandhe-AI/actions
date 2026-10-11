@@ -21,7 +21,8 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
   通常不要なため既定は無効。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
   設定し incremental 成果物をそもそも生成しない。さらに cargo 実行ステップ直後・
-  cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）
+  cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）。
+  保存は `cache-save` 入力で止められ、main だけで保存して PR は restore のみにできる
 
 ## ジョブ構成
 
@@ -116,6 +117,9 @@ jobs:
       # ホステッド runner は毎回まっさらなため cache が効く。clippy / test では
       # CARGO_INCREMENTAL=0 により incremental 成果物を生成しないためキャッシュが肥大化しない
       cache: true
+      # 保存は main の push だけで行い、PR は main の cache を restore するだけにする
+      # （PR スコープの重複 blob で 10 GB の容量を消費しない。「cache の構成」節参照）
+      cache-save: ${{ github.ref == 'refs/heads/main' }}
 ```
 
 ### 移行元リポジトリ相当の指定
@@ -145,6 +149,7 @@ with:
 | `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
 | `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v3`、`v2` へのフォールバックあり。「cache の構成」節参照） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
+| `cache-save` | - | `true` | `cache: true` のとき cache を保存するか（`false` で restore のみ）。main だけで保存する場合は `${{ github.ref == 'refs/heads/main' }}` を渡す（「cache の構成」節参照） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
 | `clippy-timeout-minutes` | - | `30` | `clippy` ジョブの timeout（分） |
 | `test-timeout-minutes` | - | `30` | `test` ジョブの timeout（分） |
@@ -162,6 +167,36 @@ with:
 |---|---|---|
 | `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v3-<Cargo.lock hash>`） |
 | `deny` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`（`target` は含まない） | `<cache-key-prefix>-<os>-deny-<Cargo.lock hash>` |
+| `deny`（cargo-deny 本体） | `~/.cargo/bin/cargo-deny` | `<cache-key-prefix>-<os>-<arch>-<ImageOS>-cargo-deny-<cargo-deny-version>`（self-hosted で `ImageOS` が無い場合は `unknown`） |
+
+`<Cargo.lock hash>` はリポジトリ直下の `Cargo.lock` だけのハッシュ（`hashFiles('Cargo.lock')`）。
+`**/Cargo.lock` だと workspace 外のサンプル・治具の `Cargo.lock` の変更でもキーが変わり、
+同内容の blob が増えるため。
+
+restore は `actions/cache/restore`、保存は `actions/cache/save` に分けている。保存ステップは
+cargo 実行（`clippy` / `test` では保存前 prune）の後ろに置き、前段が失敗したときと primary key に
+exact hit したときは保存しない（`actions/cache` の post 保存と同じ条件）。`cache-save: false` の
+ときは保存ステップが skip され、restore だけを行う。
+
+### 保存を main に限る（`cache-save`）
+
+PR の cache は `refs/pull/<N>/merge` スコープに保存され、他の PR や main からは読めない。
+既定（`cache-save: true`）では `Cargo.lock` を変えた PR や、main の cache 保存より先に走った
+PR が main と同内容の blob を PR ごとに重複保存し、リポジトリの cache 容量（10 GB）を消費する
+（`Fandhe-AI/fandhe-container` の 2026-10-11 実測: 同一キーの `clippy` / `test` / `deny` の
+blob（計約 255 MB）が main と PR 3 件で 4 重に保存され、PR スコープの blob が全体 5.4 GB の
+約 6 割を占めた）。呼び出し側が `cache-save: ${{ github.ref == 'refs/heads/main' }}` を渡すと
+main の push だけが保存し、PR は main の cache を restore（exact hit または restore-keys の
+前方一致）するだけになる。トレードオフとして、`Cargo.lock` を変えた PR は 2 回目以降の push でも
+自 PR の cache ではなく main の cache から部分復元する（同実測の PR 1 件では、main の cache からの
+部分復元（clippy 33 秒・test 173 秒）と自 PR の cache からの部分復元（clippy 45 秒・test 186 秒）で
+自 PR の cache による短縮は見られなかった。依存を大きく追加する PR では差が出得る）。
+
+`deny` ジョブは `cargo-deny` のバイナリも cache する。導入は毎回ソースビルドで約 85 秒かかり
+（同実測でジョブ 96 秒中 84 秒）、key は `Cargo.lock` に依存しないため PR・main で 1 つを共有する。
+復元後は導入ステップのバージョン完全一致判定で導入がスキップされる。runner イメージ（`ImageOS`）を
+key に含めるのは、新しいイメージの glibc でビルドしたバイナリが別イメージで動かない場合に、壊れた
+blob への exact hit が続いて毎回ソースビルドへ戻るのを避けるため。
 
 `restore-keys` は同じ prefix の前方一致。`clippy` / `test` は `v3` に加えて `v2` にも
 フォールバックする（`fmt` / `deny` はバージョンセグメントを持たない）。
