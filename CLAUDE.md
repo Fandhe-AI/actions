@@ -135,6 +135,7 @@ main コンテキストの消費を抑えるため、調査・実装・レビュ
 | `security.md` | OWASP Top 10 + GitHub Actions 特有（command injection・トークン後始末） |
 | `japanese-style.md` | 日本語出力スタイル |
 | `conventional-commits.md` | Conventional Commits 詳細規約 |
+| `github-actions.md` | GitHub Actions のキャッシュ方針（容量 10 GB・`rust-base-ci` の `cache` / `cache-save` 入力・key 設計を変えるときの互換性・効果の計測） |
 
 ## Current Skills
 
