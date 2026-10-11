@@ -21,7 +21,8 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
   通常不要なため既定は無効。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
   設定し incremental 成果物をそもそも生成しない。さらに cargo 実行ステップ直後・
-  cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）
+  cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）。
+  保存は `cache-save` 入力で止められ、main だけで保存して PR は restore のみにできる
 
 ## ジョブ構成
 
@@ -116,6 +117,9 @@ jobs:
       # ホステッド runner は毎回まっさらなため cache が効く。clippy / test では
       # CARGO_INCREMENTAL=0 により incremental 成果物を生成しないためキャッシュが肥大化しない
       cache: true
+      # 保存は main の push だけで行い、PR は main の cache を restore するだけにする
+      # （PR スコープの重複 blob で 10 GB の容量を消費しない。「cache の構成」節参照）
+      cache-save: ${{ github.ref == 'refs/heads/main' }}
 ```
 
 ### 移行元リポジトリ相当の指定
@@ -143,8 +147,9 @@ with:
 | `runner-label` | - | `self-hosted` | 全ジョブを実行する runner ラベル（public は `ubuntu-latest` 等） |
 | `deny-checks` | - | `advisories licenses sources` | `cargo deny check` に渡すチェック名（空白区切り）。`advisories` / `bans` / `licenses` / `sources` のみ許容し、それ以外は fail-closed で拒否 |
 | `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
-| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v3`、`v2` へのフォールバックあり。「cache の構成」節参照） |
+| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v4`。key に rustc の版を含み、移行期間は `v3` へフォールバックする。「cache の構成」節参照） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
+| `cache-save` | - | `true` | `cache: true` のとき cache を保存するか（`false` で restore のみ）。main だけで保存する場合は `${{ github.ref == 'refs/heads/main' }}` を渡す（「cache の構成」節参照） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
 | `clippy-timeout-minutes` | - | `30` | `clippy` ジョブの timeout（分） |
 | `test-timeout-minutes` | - | `30` | `test` ジョブの timeout（分） |
@@ -160,13 +165,52 @@ with:
 
 | ジョブ | 対象パス | key |
 |---|---|---|
-| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v3-<Cargo.lock hash>`） |
+| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v4-<rustc の release>-<commit-hash 先頭 12 桁>-<Cargo.lock hash>`） |
 | `deny` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`（`target` は含まない） | `<cache-key-prefix>-<os>-deny-<Cargo.lock hash>` |
+| `deny`（cargo-deny 本体） | `~/.cargo/bin/cargo-deny` | `<cache-key-prefix>-<os>-<arch>-<ImageOS>-cargo-deny-<cargo-deny-version>`（self-hosted で `ImageOS` が無い場合は `unknown`） |
 
-`restore-keys` は同じ prefix の前方一致。`clippy` / `test` は `v3` に加えて `v2` にも
-フォールバックする（`fmt` / `deny` はバージョンセグメントを持たない）。
+`clippy` / `test` の key は `v4` で rustc の版（`rustc -vV` の `release` と `commit-hash` の先頭 12 桁）を含む。`rust-toolchain.toml` が
+stable 追従の呼び出し側では runner イメージの更新で rustc が変わる。key に rustc が無いと、旧 rustc の
+`target` に exact hit し続けて依存を毎回全再ビルドし、exact hit のため新しい blob も保存されない。
+そのため toolchain のセットアップを restore より前に置き、取得した rustc の版で key を決める。
+`restore-keys` は同じ rustc の `v4` を優先し、移行期間だけ rustc を含まない `v3` にもフォールバックする
+（下記の `v2` → `v3` と同じく cold run を挟まない移行。`v3` 行は `v3` blob が evict された後に削除してよい）。
 
-`clippy` / `test` の key に含まれる `v3` は、保存前 prune（下記）を追加した縮小版
+`<Cargo.lock hash>` はリポジトリ直下の `Cargo.lock` だけのハッシュ（`hashFiles('Cargo.lock')`）。
+`**/Cargo.lock` だと workspace 外のサンプル・治具の `Cargo.lock` の変更でもキーが変わり、
+同内容の blob が増えるため。
+
+restore は `actions/cache/restore`、保存は `actions/cache/save` に分けている。保存ステップは
+cargo 実行（`clippy` / `test` では保存前 prune）の後ろに置き、前段が失敗したときと primary key に
+exact hit したときは保存しない（`actions/cache` の post 保存と同じ条件）。`cache-save: false` の
+ときは保存ステップが skip され、restore だけを行う。
+
+### 保存を main に限る（`cache-save`）
+
+PR の cache は `refs/pull/<N>/merge` スコープに保存され、他の PR や main からは読めない。
+既定（`cache-save: true`）では `Cargo.lock` を変えた PR や、main の cache 保存より先に走った
+PR が main と同内容の blob を PR ごとに重複保存し、リポジトリの cache 容量（10 GB）を消費する
+（`Fandhe-AI/fandhe-container` の 2026-10-11 実測: 同一キーの `clippy` / `test` / `deny` の
+blob（計約 255 MB）が main と PR 3 件で 4 重に保存され、PR スコープの blob が全体 5.4 GB の
+約 6 割を占めた）。呼び出し側が `cache-save: ${{ github.ref == 'refs/heads/main' }}` を渡すと
+main の push だけが保存し、PR は main の cache を restore（exact hit または restore-keys の
+前方一致）するだけになる。トレードオフとして、`Cargo.lock` を変えた PR は 2 回目以降の push でも
+自 PR の cache ではなく main の cache から部分復元する（同実測の PR 1 件では、main の cache からの
+部分復元（clippy 33 秒・test 173 秒）と自 PR の cache からの部分復元（clippy 45 秒・test 186 秒）で
+自 PR の cache による短縮は見られなかった。依存を大きく追加する PR では差が出得る）。
+
+`deny` ジョブは `cargo-deny` のバイナリも cache する。導入は毎回ソースビルドで約 85 秒かかり
+（同実測でジョブ 96 秒中 84 秒）、key は `Cargo.lock` に依存しないため PR・main で 1 つを共有する。
+復元後は導入ステップのバージョン完全一致判定で導入がスキップされる。runner イメージ（`ImageOS`）を
+key に含めるのは、新しいイメージの glibc でビルドしたバイナリが別イメージで動かない場合に、壊れた
+blob への exact hit が続いて毎回ソースビルドへ戻るのを避けるため。
+
+`restore-keys` は同じ prefix の前方一致。`clippy` / `test` は同じ rustc の `v4` を優先し、移行期間だけ
+`v3` にもフォールバックする（`fmt` / `deny` はバージョンセグメントを持たない）。
+
+以下は `v3` までの版セグメントの経緯（現行は上記の `v4`）。
+
+`clippy` / `test` の key に含まれていた `v3` は、保存前 prune（下記）を追加した縮小版
 キャッシュへ切り替えた版セグメントである（`v2` は incremental 除外のみを行った #132 時点の
 セグメント）。`cache: true` のとき、この 2 ジョブは `CARGO_INCREMENTAL=0` を設定して
 `target/debug/incremental` をそもそも生成しない（保存後に除外するのではなく生成自体を
@@ -177,13 +221,13 @@ with:
 イシュー #134）。blob の縮小は `v3` の保存前 prune（下記）に依存する。
 
 既存キーへの exact hit では `actions/cache` が保存をスキップし縮小版が永久に
-保存されないため、`v3` セグメントで新しいキー空間に切り替えている。`restore-keys` は
-`v3` に加えて `v2` へもフォールバックする: `v2` の blob は incremental を含まず
+保存されないため、`v3` セグメントで新しいキー空間に切り替えた。当時の `restore-keys` は
+`v3` に加えて `v2` へもフォールバックしていた: `v2` の blob は incremental を含まず
 （#132 で生成自体を抑止済み）、prune は保存前に走るため、`v2` を復元してビルド・prune
 した上で `v3` として保存し直しても縮小の意味は損なわれない。そのため **`v2` → `v3` の
 bump では cold run を挟まない**（`v2` から `v3` へフォールバックしない bump を行う場合は
-旧キャッシュを復元しないため 1 回だけ cold になる）。`v2` の `restore-keys` 行は `v2`
-blob が evict（7 日）された後に削除してよい。
+旧キャッシュを復元しないため 1 回だけ cold になる）。`v2` の `restore-keys` 行は `v4` への
+切り替え（#165）で削除した。
 
 `cache: false`（既定）では該当ステップがすべて skip され挙動は変わらない。
 
@@ -281,8 +325,8 @@ gh api repos/actions/cache/git/tags/<tag-object-sha> --jq '.object.sha'
   self-hosted runner では復元コストのほうが大きく、既定 (`false`) のままでよい
 - `clippy` / `test` の cache key の版セグメントを bump した際、旧キーへフォールバック
   しない bump（`v2` 導入時の #132 相当）は対象ジョブが 1 回だけ cold になる。`v2` → `v3`
-  （#133）のように旧キーへフォールバックする bump では cold にならない（「cache の構成」
-  節参照）
+  （#133）・`v3` → `v4`（#165）のように旧キーへフォールバックする bump では cold にならない
+  （「cache の構成」節参照）
 - self-hosted runner で `cache: true` を使う場合、保存前 prune ステップに `jq` が必要
   （GitHub ホステッドは同梱。「cache の構成」節参照）
 - **リポジトリの cache 容量上限（10 GB）による evict は `restore-keys` の前方一致
