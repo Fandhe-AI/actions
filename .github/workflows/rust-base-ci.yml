@@ -47,13 +47,14 @@ name: Rust base CI (reusable)
 #   キャッシュ価値がないため（#131 計測で target/debug/deps が全体の約 81.5%、うち大半は
 #   統合テスト・ベンチバイナリ。イシュー #133）。依存 crate の成果物（deps/ の依存側 rlib・
 #   ~/.cargo）は残す
-#   あわせてキーへ版セグメント `v3` を追加している（#132 で導入した `v2` からの bump）。
+#   あわせてキーへ版セグメント `v3` を追加した（#132 で導入した `v2` からの bump。現行は下記の
+#   rustc の版を含む `v4`）。
 #   既存キーへの exact hit では actions/cache が保存をスキップし縮小版が永久に保存されない
-#   ため、新キー空間へ切り替える必要があった。restore-keys は `v3` に加えて `v2` へも
-#   フォールバックする: v2 blob は incremental を含まず（#132 で生成自体を抑止済み）、
+#   ため、新キー空間へ切り替える必要があった。当時の restore-keys は `v3` に加えて `v2` へも
+#   フォールバックしていた: v2 blob は incremental を含まず（#132 で生成自体を抑止済み）、
 #   prune は保存前に走るため、v2 を復元してビルド・prune した上で v3 として保存しても
 #   縮小の意味は損なわれない（v2→v3 は cold run を挟まずに移行できる）。v2 の
-#   restore-keys 行は v2 blob が evict（7 日）された後に削除してよい。版を bump する場合は
+#   restore-keys 行は v4 への切り替えで削除した。版を bump する場合は
 #   clippy / test 両ジョブを同時に更新する
 # - cache は actions/cache/restore と actions/cache/save に分けて使い、保存は `cache-save`
 #   入力（既定 true）で止められる。呼び出し側が `cache-save: ${{ github.ref == 'refs/heads/main' }}`
