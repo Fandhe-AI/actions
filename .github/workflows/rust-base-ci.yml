@@ -73,6 +73,9 @@ name: Rust base CI (reusable)
 #   exact hit のため保存もされない。toolchain の取得を cache の restore より前に移した
 # - deny ジョブは cargo-deny のバイナリ（~/.cargo/bin/cargo-deny）を OS・アーキテクチャ・
 #   runner イメージ・バージョンをキーに cache し、毎回のソースビルド（約 85 秒）を省く
+# - `cache` 入力が効くのは clippy / test / deny ジョブだけで、fmt ジョブは cache を持たない。
+#   `cargo fmt` は依存の取得もビルドもせず保存対象のパスを作らないため、restore は毎回 miss し、
+#   保存は "Path Validation Error" の警告を出すだけだった（fandhe-db run 38121631475）
 #
 # 前提1: runner に正常動作する rustup が導入済みであること。rust-toolchain-setup v1.1.0（#86）
 # 以降、rustup が未導入・破損している場合はネットワーク導入せず fail-closed でエラー終了する。
@@ -106,7 +109,8 @@ on:
         default: 0.20.2
       cache:
         description: >-
-          cargo レジストリ・target ディレクトリの cache を有効にする（オプトイン）。
+          cargo レジストリ・target ディレクトリの cache を有効にする（オプトイン。
+          clippy / test / deny ジョブが対象で、fmt ジョブは cache を持たない）。
           workspace が永続する self-hosted runner では通常不要なため既定は false
         type: boolean
         required: false
@@ -179,21 +183,7 @@ jobs:
             echo "::notice::Cargo.toml が無いため cargo fmt --check をスキップしました"
           fi
 
-      # cache は Cargo.lock のハッシュを key に含めるため、Cargo.toml 不在時は
-      # hashFiles が空文字になり全 key が接頭辞へ潰れる。detect ガード下に置く。
-      - name: Restore cargo cache
-        id: cargo-cache
-        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-fmt-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-fmt-
+      # fmt ジョブは `cache: true` でも cache を restore・保存しない（冒頭の設計の要点参照）。
 
       # rust-toolchain.toml への同期と rustfmt component の冪等追加を担う。
       # v1.1.0 以降、rustup が未導入・破損している場合はネットワーク導入せず
@@ -215,19 +205,6 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --all --check
-
-      # 保存は restore と同じ path・primary key で行う。exact hit（cache-hit == 'true'）では
-      # 内容が同じため保存しない。条件に status 関数を含めないので、前段の失敗時は保存しない
-      - name: Save cargo cache
-        if: inputs.cache && inputs.cache-save && steps.detect.outputs.has_cargo == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # --------------------------------------------------
   # cargo clippy -- -D warnings（lint ゲート）
