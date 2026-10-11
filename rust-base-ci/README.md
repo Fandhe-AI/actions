@@ -165,11 +165,11 @@ with:
 
 | ジョブ | 対象パス | key |
 |---|---|---|
-| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v4-<rustc -vV hash>-<Cargo.lock hash>`） |
+| `fmt` / `clippy` / `test` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`・`target` | `<cache-key-prefix>-<os>-<job>-<Cargo.lock hash>`（`clippy` / `test` は `<cache-key-prefix>-<os>-<job>-v4-<rustc の release>-<commit-hash 先頭 12 桁>-<Cargo.lock hash>`） |
 | `deny` | `~/.cargo/registry/index`・`~/.cargo/registry/cache`・`~/.cargo/git/db`（`target` は含まない） | `<cache-key-prefix>-<os>-deny-<Cargo.lock hash>` |
 | `deny`（cargo-deny 本体） | `~/.cargo/bin/cargo-deny` | `<cache-key-prefix>-<os>-<arch>-<ImageOS>-cargo-deny-<cargo-deny-version>`（self-hosted で `ImageOS` が無い場合は `unknown`） |
 
-`clippy` / `test` の key は `v4` で `rustc -vV` のハッシュを含む。`rust-toolchain.toml` が
+`clippy` / `test` の key は `v4` で rustc の版（`rustc -vV` の `release` と `commit-hash` の先頭 12 桁）を含む。`rust-toolchain.toml` が
 stable 追従の呼び出し側では runner イメージの更新で rustc が変わる。key に rustc が無いと、旧 rustc の
 `target` に exact hit し続けて依存を毎回全再ビルドし、exact hit のため新しい blob も保存されない。
 そのため toolchain のセットアップを restore より前に置き、取得した rustc の版で key を決める。
