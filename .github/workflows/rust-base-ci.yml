@@ -66,6 +66,10 @@ name: Rust base CI (reusable)
 #   actions/cache の post 保存と同じに保つ
 # - cache key のハッシュはルートの Cargo.lock だけを入力にする（`**/Cargo.lock` だと
 #   workspace 外のサンプル・治具の Cargo.lock の変更でもキーが変わり、同内容の blob が増える）
+# - clippy / test の key には `rustc -vV` のハッシュも入れる（版セグメント `v4`。v3 へは移行期間
+#   だけフォールバックする）。rust-toolchain.toml が stable 追従だと runner イメージの更新で rustc が
+#   変わり、key に rustc が無いと旧 rustc の target に exact hit し続けて依存を毎回全再ビルドし、
+#   exact hit のため保存もされない。toolchain の取得を cache の restore より前に移した
 # - deny ジョブは cargo-deny のバイナリ（~/.cargo/bin/cargo-deny）を OS・アーキテクチャ・
 #   runner イメージ・バージョンをキーに cache し、毎回のソースビルド（約 85 秒）を省く
 #
@@ -251,27 +255,6 @@ jobs:
             echo "::notice::Cargo.toml が無いため cargo clippy をスキップしました"
           fi
 
-      - name: Restore cargo cache
-        # キーの `v3` は workspace メンバー成果物の保存前 prune を追加した縮小版キャッシュ
-        # 空間への切り替えセグメント（#133。#132 の `v2` からの bump）。restore-keys は
-        # `v3` に加えて `v2` へもフォールバックする: v2 blob は incremental を含まず
-        # （#132）、prune は保存前に走るため v2 を復元してもそのまま安全に v3 として
-        # 保存し直せる（cold run を挟まない移行）。v2 行は v2 blob が evict（7 日）された
-        # 後に削除してよい。
-        id: cargo-cache
-        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v3-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v3-
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v2-
-
       - name: インクリメンタルコンパイルを無効化（cache 有効時のみ）
         # cache: true のときだけ CARGO_INCREMENTAL=0 を設定する（Restore cargo cache と
         # 同一条件）。incremental ディレクトリの削除ではなく生成自体の抑止であり、以降の
@@ -288,6 +271,41 @@ jobs:
         uses: Fandhe-AI/actions/rust-toolchain-setup@latest
         with:
           components: clippy
+
+      # target の成果物は rustc の版ごとに別物になるため、key に `rustc -vV` のハッシュを入れる。
+      # 入れないと runner イメージの更新で stable の rustc が変わった後も旧 rustc の blob に
+      # exact hit し続け、依存を毎回全再ビルドしたうえ exact hit のため保存もされない。
+      # toolchain は rust-toolchain.toml に従うため、Setup Rust toolchain の後に取得する
+      - name: rustc の版を取得（cache key 用）
+        id: rustc
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          hash="$(rustc -vV | sha256sum | cut -c1-16)"
+          echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
+          rustc -vV
+
+      - name: Restore cargo cache
+        # キーの `v4` は rustc の版（上のステップ）を key に入れた空間への切り替えセグメント。
+        # restore-keys は同じ rustc の `v4` を優先し、移行期間だけ `v3`（rustc を含まない旧 key。
+        # 保存前 prune 済み・#133）にもフォールバックする（cold run を挟まない移行）。`v3` 行は
+        # `v3` blob が evict（7 日）された後に削除してよい。`v3` の blob が別の rustc のものだった
+        # 場合は依存が再ビルドされるが、新しい `v4` の key で保存し直されるため 1 回で収まる。
+        # 版を bump する場合は clippy / test 両ジョブを同時に更新する
+        id: cargo-cache
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v4-${{ steps.rustc.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v4-${{ steps.rustc.outputs.hash }}-
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v3-
 
       - name: cargo clippy --workspace --all-targets --all-features
         if: steps.detect.outputs.has_cargo == 'true'
@@ -473,27 +491,6 @@ jobs:
             echo "::notice::Cargo.toml が無いため cargo test をスキップしました"
           fi
 
-      - name: Restore cargo cache
-        # キーの `v3` は workspace メンバー成果物の保存前 prune を追加した縮小版キャッシュ
-        # 空間への切り替えセグメント（#133。#132 の `v2` からの bump）。restore-keys は
-        # `v3` に加えて `v2` へもフォールバックする: v2 blob は incremental を含まず
-        # （#132）、prune は保存前に走るため v2 を復元してもそのまま安全に v3 として
-        # 保存し直せる（cold run を挟まない移行）。v2 行は v2 blob が evict（7 日）された
-        # 後に削除してよい。
-        id: cargo-cache
-        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v3-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v3-
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v2-
-
       - name: インクリメンタルコンパイルを無効化（cache 有効時のみ）
         # cache: true のときだけ CARGO_INCREMENTAL=0 を設定する（Restore cargo cache と
         # 同一条件）。incremental ディレクトリの削除ではなく生成自体の抑止であり、以降の
@@ -508,6 +505,41 @@ jobs:
       - name: Setup Rust toolchain
         if: steps.detect.outputs.has_cargo == 'true'
         uses: Fandhe-AI/actions/rust-toolchain-setup@latest
+
+      # target の成果物は rustc の版ごとに別物になるため、key に `rustc -vV` のハッシュを入れる。
+      # 入れないと runner イメージの更新で stable の rustc が変わった後も旧 rustc の blob に
+      # exact hit し続け、依存を毎回全再ビルドしたうえ exact hit のため保存もされない。
+      # toolchain は rust-toolchain.toml に従うため、Setup Rust toolchain の後に取得する
+      - name: rustc の版を取得（cache key 用）
+        id: rustc
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          hash="$(rustc -vV | sha256sum | cut -c1-16)"
+          echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
+          rustc -vV
+
+      - name: Restore cargo cache
+        # キーの `v4` は rustc の版（上のステップ）を key に入れた空間への切り替えセグメント。
+        # restore-keys は同じ rustc の `v4` を優先し、移行期間だけ `v3`（rustc を含まない旧 key。
+        # 保存前 prune 済み・#133）にもフォールバックする（cold run を挟まない移行）。`v3` 行は
+        # `v3` blob が evict（7 日）された後に削除してよい。`v3` の blob が別の rustc のものだった
+        # 場合は依存が再ビルドされるが、新しい `v4` の key で保存し直されるため 1 回で収まる。
+        # 版を bump する場合は clippy / test 両ジョブを同時に更新する
+        id: cargo-cache
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v4-${{ steps.rustc.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v4-${{ steps.rustc.outputs.hash }}-
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v3-
 
       - name: cargo test --workspace --all-features
         if: steps.detect.outputs.has_cargo == 'true'
