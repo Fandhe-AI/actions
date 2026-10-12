@@ -668,8 +668,12 @@ jobs:
     # 実行ランナーは呼び出し側が runner-json で指定する。書式は input の description を参照。
     runs-on: ${{ fromJSON(inputs.runner-json) }}
     # npx skills のダウンロード・全スキル更新・PR 作成の実処理量に見合う上限。
-    # submodule ジョブより取得対象が多いため長めに取る。
-    timeout-minutes: 15
+    # submodule ジョブより取得対象が多いため長めに取る。スキル数の多いリポ
+    # （fandhe-multi-platform の 58 件）は runner によって所要が大きく変わり、
+    # fandhe-server では 3〜7 分だが macbook-pro では成功時でも 12〜14 分かかり、
+    # 15 分上限では cancel が続いた（2026-10-12 実測）。遅い runner でも完走する
+    # 余裕を持たせて 30 分にする。
+    timeout-minutes: 30
     # 最小権限。理由は submodule ジョブ側の注記を参照（書き込みは PAT のみで行い、
     # GITHUB_TOKEN に write を与えると PAT の fail-closed ガードを迂回できる経路が
     # 増えるため）。
