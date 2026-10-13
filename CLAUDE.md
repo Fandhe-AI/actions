@@ -12,11 +12,11 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 - **Composite Action**: 各アクションは独自のディレクトリに `action.yml` + `README.md` の
   ペアで構成。bash + `gh` CLI のみで実装（Docker/Node.js 不使用）
 - **Reusable workflow**（`.github/workflows/`）: 複数ジョブ・runner 選択・permissions 分離を
-  要するものは `on: workflow_call` の reusable workflow として提供する（第 1 号: codex-review。
+  要するものは `on: workflow_call` の reusable workflow として提供する（第 1 号: codex-review〔2026-10-14 削除〕。
   現行の PR レビュー workflow は provider 非依存化した ai-review）。付随ファイル（既定設定・
   prompt 等）と README は Composite Action と同様に専用ディレクトリ（例: `ai-review/`）へ置く。
   Composite Action の「Docker/Node.js 不使用」規約は reusable workflow には適用しない
-  （例: ai-review / codex-review は `actions/setup-node` + npm でジョブ内に CLI を導入する）が、
+  （例: ai-review は `actions/setup-node` + npm でジョブ内に CLI を導入する）が、
   action / CLI のバージョンは SHA・バージョン固定とする
 - 入力値は `env:` 経由でシェル変数に渡す（`${{ inputs.* }}` を直接 `run:` に埋め込まない）
 
@@ -33,7 +33,6 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | `submodule-update/` | Composite Action | git submodule を最新に追従させ、変更があれば PR を自動作成 |
 | `skills-update/` | Composite Action | `npx skills` 導入のエージェントスキルを最新に更新し、変更があれば PR を自動作成 |
 | `ai-review/` | Reusable workflow | 複数 AI provider（codex/claude/gemini/grok/OpenAI 互換 API）による PR 自動レビュー（provider 切替・複数モデル同時レビュー・runner/認証の provider ごと切替・2 段 fail-closed gate・多層防御・既定で write 以上の actor（と dependabot）のみ実行。workflow 本体は `.github/workflows/ai-review.yml`） |
-| `codex-review/` | Reusable workflow | **凍結・後継 `ai-review/`**。OpenAI Codex CLI による PR 自動レビュー（codex-home 認証・2 段 fail-closed gate・多層防御。workflow 本体は `.github/workflows/codex-review.yml`） |
 | `rust-base-ci/` | Reusable workflow | Rust のベースライン品質ゲート（`fmt` / `clippy` / `test` / `deny` + fail-closed 集約ジョブ。runner は `runner-label` 入力で指定、`Cargo.toml` 不在時は success のまま skip。cache 有効時は incremental 抑止 + 保存前 workspace メンバー成果物 prune。workflow 本体は `.github/workflows/rust-base-ci.yml`） |
 | `pages-deploy/` | Reusable workflow | GitHub Pages への deploy（呼び出し側 build ジョブの dist を汎用 artifact で受け取り、Pages artifact 変換〜deploy まで共通側で実行。workflow 本体は `.github/workflows/pages-deploy.yml`） |
 | `lint-docs/` | Reusable workflow | ドキュメント／設定ファイル系 lint（markdownlint・editorconfig-checker・yamllint・commitlint を独立ジョブ + boolean input で個別に切替。reviewdog は opt-in、runner は `runner-label` で呼び出し元指定。workflow 本体は `.github/workflows/lint-docs.yml`） |

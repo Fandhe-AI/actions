@@ -47,8 +47,8 @@ workflow からは検証できないため、runner 構築・org 設定の側で
 ### 1-3. 呼び出し側リポジトリが担保する
 
 - `post-feedback-runner` を明示的に渡すか、既定値（public では `ubuntu-latest`）のまま
-  使う（ai-review は codex-review と異なり、public リポジトリの既定値が最初から
-  `ubuntu-latest` になるため、**明示指定は不要**）
+  使う（public リポジトリの既定値が最初から `ubuntu-latest` になるため、
+  **明示指定は不要**）
 - 資格情報（home-dir 用の Actions variable、または secret `API_KEY`）を設定する
 - `uses:` は `@latest` で参照する（`latest` は main へ自動追従する）
 
@@ -56,7 +56,7 @@ workflow からは検証できないため、runner 構築・org 設定の側で
 
 ai-review の `preflight` / `post_feedback` の既定 runner は、private なら `self-hosted`・
 public なら `ubuntu-latest` に自動で切り替わる（`github.event.repository.private` を見て
-分岐する）。したがって **codex-review と異なり、public リポジトリでも
+分岐する）。したがって **public リポジトリでも
 `post-feedback-runner` の明示指定は不要**。`runner`（review ジョブ）だけが provider 名と
 同名ラベルの既定になる。
 
@@ -93,17 +93,6 @@ jobs:
 |---|---|---|
 | `review`（`runner`） | self-hosted な sudo なし専用ラベル（既定は provider 名） | **例外の対象**。agentic の home-dir 認証・local LLM の LAN 到達性はホステッドでは成立しない |
 | `preflight` / `post_feedback`（`post-feedback-runner`） | 既定で可視性どおり自動切替（public は `ubuntu-latest`） | 資格情報に触れないため例外の対象外。既定値のままで方針に合致する |
-
-**codex-review.yml（凍結）を使い続ける public リポジトリ向け**の従来記述（
-`post-feedback-runner-label: ubuntu-latest` の明示が必須）は codex-review 固有の既定値の
-都合であり、ai-review へ移行済みのリポジトリには適用しない。codex-review を使い続ける
-限りは、引き続き明示指定が必要:
-
-```yaml
-# codex-review.yml（凍結）を使い続ける public リポジトリの場合のみ
-with:
-  post-feedback-runner-label: ubuntu-latest
-```
 
 ## 3. 例外が及ばない範囲
 
@@ -144,5 +133,4 @@ skip の扱いを branch protection 側で設計すること。
 - [`../../docs/runner-policy.md`](../../docs/runner-policy.md) — 組織 runner 方針（原典）
 - [`../README.md`](../README.md) — 導入手順・provider 一覧・Inputs
 - [`self-hosted-runner.md`](self-hosted-runner.md) — runner 構築手順
-- [`../../codex-review/README.md`](../../codex-review/README.md) — codex-review（凍結）
 - [`../../pages-deploy/README.md`](../../pages-deploy/README.md) — 同じく `runner-label` の既定が `self-hosted`

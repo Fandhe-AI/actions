@@ -1,8 +1,8 @@
 # ai-review
 
 複数の AI（OpenAI Codex / Anthropic Claude / Google Gemini / xAI Grok / OpenAI 互換 API の
-local LLM 等）で PR を自動レビューする reusable workflow。`codex-review`（Codex 専用。互換の
-ため凍結して残置）を provider 非依存に一般化したもの。PR の差分を AI がレビューし、優先度付き
+local LLM 等）で PR を自動レビューする reusable workflow。`codex-review`（Codex 専用。
+2026-10-14 削除）を provider 非依存に一般化したもの。PR の差分を AI がレビューし、優先度付き
 の指摘（P0〜P3）を **PR レビュー（総括 + 該当行へのインラインコメント）**として投稿、ブロック
 対象 priority（既定 P0/P1）の検出時は CI ジョブを失敗させる。複数モデルを並列に走らせて
 見落としを相互補完する「複数モデルでの同時レビュー」にも対応する。workflow 本体は
@@ -260,8 +260,8 @@ workflow 本体と同梱既定制御ファイルは常に同一コミットの�
 
 ## codex-review からの移行
 
-既存の `codex-review.yml` wrapper はそのまま動き続ける（`codex-review.yml` は凍結し
-セキュリティ修正のみ行う）。ai-review へ移行する手順:
+`codex-review.yml` は 2026-10-14 に削除済み（org 内に呼び出し元が無いことを確認のうえ削除）。
+旧 wrapper が残っていると workflow の解決に失敗するため、次の手順で ai-review へ移行する:
 
 1. **テンプレートで wrapper を置換する**。`with:` の対応表:
 
@@ -326,7 +326,7 @@ signal は無い。したがってこの入力を指定したリポジトリで�
 到達できる。
 
 この残留を承知のうえで使用する判断を採っている。根拠は codex-review の同判断
-（[`codex-review/README.md`](../codex-review/README.md)「`skip-branch-prefixes` の受容済み残留
+（削除前の [`codex-review/README.md`](https://github.com/Fandhe-AI/actions/blob/0293b9a866d40d56e36a2758ef55cbfe816dfb55/codex-review/README.md)「`skip-branch-prefixes` の受容済み残留
 リスク」、2026-08-18 判断・2026-08-21 更新）と同じで、次の 2 点。
 
 - 迂回できるのは対象リポジトリへ push できる主体に限られ、Fandhe-AI 配下では実質オーナーと
