@@ -73,6 +73,8 @@ jobs:
 - 例外を安全に成立させるための前提は `ai-review/README.md` および
   `.github/workflows/ai-review.yml` のコメントを参照。特に以下が必須:
   - fork からの PR では実行しない（untrusted コードを self-hosted runner で実行しない）
+  - write 未満の actor（許可 bot の `dependabot[bot]` を除く）のイベントでは `preflight` を失敗させる
+    （`collaborators-only`、既定有効）
   - ジョブユーザーに passwordless sudo を与えない（agentic のみ）
   - 信頼できないリポジトリへ runner を共有しない
 

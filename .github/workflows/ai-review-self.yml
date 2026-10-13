@@ -5,6 +5,9 @@
 # 呼び出し側リポジトリと同じ薄い wrapper を別ファイル名で追加して自己適用する。
 # 内容は単一 provider テンプレート（ai-review/templates/ai-review.single.yml）相当。
 #
+# 既定で、write 未満の actor（許可 bot を除く）のイベントでは preflight が失敗する
+# （collaborators-only。本リポジトリは既定のまま適用）。
+#
 # 有効化のスイッチは呼び出し先 reusable workflow の fail-closed ガードに従う:
 # Actions variable `CODEX_HOME_DIR` が未設定の間は review / post_feedback が skip される
 # （runner 側の準備が済むまでレビューは実行されない）。

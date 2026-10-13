@@ -11,6 +11,11 @@
 # 使わない reviewer のジョブは残したままでも害はない（不要なら削除してよい）。
 # レート枠・API 課金は reviewer の数だけ消費される点に注意。
 #
+# 既定では、イベント発生者が write 未満（許可 bot の dependabot[bot] を除く）だと preflight が
+# 失敗し、ai-review-gate も失敗する。調整が要る場合は全 reviewer ジョブの with: に追加する:
+#   # collaborators-only: false        # write 未満の actor もレビュー対象にする（既定 true）
+#   # allowed-bot-actors: "dependabot[bot],renovate[bot]"  # 権限によらず許可する bot（既定 dependabot[bot]）
+#
 # 自動生成 PR（日次同期 PR 等）をレビュー対象外にする場合は、全 reviewer ジョブの with: に
 # 同じ値の skip-branch-prefixes を追加する（例 "chore/skills-update-,chore/submodule-update-"）。
 # push できる主体はブランチ名で gate を回避できる（受容済み残留リスク。ai-review/README.md
@@ -189,7 +194,7 @@ jobs:
             if [ "${reason}" = branch-prefix ]; then prefix_skipped=$((prefix_skipped + 1)); fi
           done
           if [ "${failed}" -gt 0 ]; then
-            echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー。各ジョブと PR レビューを参照）"
+            echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー・非 collaborator による起動（preflight 失敗）。各ジョブと PR レビューを参照）"
             exit 1
           fi
           if [ "${reviewed}" -eq 0 ] && [ "${prefix_skipped}" -eq "${total}" ]; then
