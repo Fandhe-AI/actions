@@ -30,7 +30,8 @@ provider は 2 方式に分かれる。
 ジョブ構成は `preflight → review → post_feedback` の 3 段。
 
 - **preflight**: 入力検証・既定値解決・有効化判定（資格情報の有無）・skip 判定を行う。
-  資格情報の値には触れず「設定の有無」だけを見る。fork PR では起動しない
+  資格情報の値には触れず「設定の有無」だけを見る。fork PR では起動しない。既定ではイベント発生者
+  （`github.actor`）の権限も検証し、write 未満（許可 bot を除く）なら失敗させる（`collaborators-only`）
 - **review**: PR head を checkout し、prompt / schema / スクリプトを本リポジトリの
   同梱既定版から取得、制御ファイルを base コミットから抽出、CLI/API を実行、
   `normalize-output.mjs` で契約を検証・正規化する
@@ -64,6 +65,8 @@ provider は 2 方式に分かれる。
 多層防御を重ねている。
 
 - fork からの PR ではジョブを実行しない（`preflight` の `if`）
+- イベント発生者（`github.actor`）が write 以上でない場合（許可 bot を除く）は `preflight` を失敗させる
+  （既定。`collaborators-only`、判定不能時も失敗。`skip-branch-prefixes` や資格情報の判定より前に行う）
 - 資格情報未設定の間は review ジョブを skip する（有効化スイッチ。設定が唯一の有効化操作）
 - passwordless sudo を持つ runner では agentic レビューを拒否する（`Verify sudo is not
   available`。API provider はツールを持たないため対象外）
@@ -199,6 +202,8 @@ required にする運用のどちらかを選ぶ。
   一致）の場合に限り通す（`skip-branch-prefixes` は全 reviewer ジョブに同じ値を渡す）。fork PR を
   受け付ける public リポジトリで本ジョブを required にする場合は、fork PR では全 reviewer が
   起動しないため `MIN_REVIEWERS` の扱いを branch protection 側で設計すること
+- `collaborators-only` により、write 未満の actor のイベントでは reviewer の `preflight` が失敗する。
+  `needs` の結果が `success` / `skipped` 以外のため `ai-review-gate` も失敗する（gate の変更は不要）
 - 同じ provider を複数ジョブ（例: local LLM 2 モデル）で使う場合は `reviewer-id` を必ず
   ジョブごとに分ける（自動 resolve の識別マーカーが reviewer-id 単位のため）
 - quota・API 課金は reviewer の数だけ消費される
@@ -227,6 +232,8 @@ required にする運用のどちらかを選ぶ。
 | `schema-path` | - | `.github/ai-review/review-schema.json` | 呼び出し側リポジトリの出力 schema パス（制約は `prompt-path` と同じ） |
 | `block-priorities` | - | `P0,P1` | ジョブを失敗させる指摘の priority（カンマ区切り）。P0/P1 は必須集合（除外不可） |
 | `skip-branch-prefixes` | - | （空） | レビューを skip する head branch 名の接頭辞（カンマ区切り。例 `chore/skills-update-,chore/submodule-update-`）。`update-external.yml` の日次同期 PR のような自動生成 PR 用。`preflight` がリテラルの前方一致のみで判定し、一致時は `review` / `post_feedback` を実行しない（`skip-reason: branch-prefix`）。push できる主体はブランチ名で gate を回避できる（後述「受容済み残留リスク」）。接頭辞は自動生成 PR だけが使う十分に限定的な値にする（区切り文字 `-` まで含める） |
+| `collaborators-only` | - | `true` | イベント発生者（`github.actor`）が対象リポジトリに write 以上（admin / maintain / write）の権限を持つ場合、または `allowed-bot-actors` に一致する場合だけレビューする。満たさない場合・判定不能時は `preflight` を失敗させる（fail-closed）。`false` で無効化 |
+| `allowed-bot-actors` | - | `dependabot[bot]` | `collaborators-only` 有効時に権限によらず許可する bot の login（カンマ区切り、完全一致）。各要素は `<name>[bot]` 形式必須で、満たさなければ fail-closed で拒否する（人間のアカウントは入れられない）。空にすると bot も権限判定に回す |
 
 ### Secrets
 
@@ -328,8 +335,31 @@ signal は無い。したがってこの入力を指定したリポジトリで�
 - Cursor Bugbot は Actions 側の skip の影響を受けず、skip 対象の PR も従来どおりレビューする
 
 指定しないリポジトリ（既定は空）ではこの経路は存在しない。判定不能時に skip 側へ倒す
-fail-open 化・fork PR への拡大・接頭辞以外の条件（actor・ラベル等）による skip の新設は
-受容範囲外である。
+fail-open 化・fork PR への拡大・接頭辞以外の条件（actor・ラベル等）による **skip** の新設は
+受容範囲外である（fail-closed な制限である `collaborators-only` は除く。次節）。
+
+### actor 判定（`collaborators-only`）の導入（2026-10-14 オーナー判断）
+
+org 所有の public リポジトリでは、org メンバーは head ブランチへの write 権限が無くても PR を
+作成できる（base permission が `read` でも same-repo PR が成立する）。資格情報・quota を使う
+review ジョブが write 権限の無い主体の PR で動くのを防ぐため、`preflight` の先頭で
+`github.actor` の権限を権限 API で確認し、write 以上でなければ**失敗**させる（skip ではない）。
+
+- マージを止めるには、`<job> / preflight` を required status check に登録する必要がある。
+  失敗時の `review` / `post_feedback` は skipped で、skipped は required check を満たすため、
+  preflight を required にしない構成ではマージは止まらない
+- 判定は `skip-branch-prefixes` と資格情報の有効化判定より前に行う。そのため接頭辞に一致する
+  ブランチでも green skip にならず、資格情報未設定の利用側でも非該当 actor のイベントでは
+  `preflight` が赤になる
+- `dependabot[bot]` を既定で許可する理由: Dependabot のコマンド（`@dependabot recreate` 等）は
+  write 権限が無いと実行できず、`dependabot[bot]` のイベントを任意に起こせるのは実質 collaborator と
+  Dependabot 自身の定期実行に限られる。許可しないと依存更新 PR のレビューが失われるため
+- `github.actor` は最初にイベントを起こしたユーザーで、re-run しても変わらない（collaborator が
+  re-run しても判定は通らない）。write 以上の collaborator が追加 push するか close→reopen して
+  再判定させる
+- `collaborators-only: false` / `allowed-bot-actors` の変更は wrapper で明示した場合だけ有効になる
+  （wrapper を書き換えられる主体は元々 run ステップを足せるため、境界の後退にはならない）
+- fork PR は従来どおり対象外（`preflight` の `if`）
 
 ### その他の注意
 
@@ -346,6 +376,7 @@ fail-open 化・fork PR への拡大・接頭辞以外の条件（actor・ラベ
 | 症状 | 原因 | 対処 |
 |---|---|---|
 | review ジョブが `skipped`（PR コメントも出ない） | 資格情報未設定、または fork からの PR | 「セットアップ」3 で variable/secret を設定する。fork PR は仕様上実行しない |
+| `preflight` が「write 以上の権限を持たない」で失敗 | write 未満のユーザー、または `allowed-bot-actors` にない bot が起こしたイベント | write 以上の collaborator が追加 push するか close→reopen する（re-run では actor が変わらず通らない）。bot を恒常的に許可するなら `allowed-bot-actors` に追加する |
 | ジョブが `Waiting for a runner` のまま進まない | runner が未登録・runner group 未許可、または既定の用途ラベル（`codex` / `claude` / `gemini`）を持つ runner が無い | runner group 設定を確認し、runner にラベルを追加するか `runner` 入力で既存ラベルを指定する（`docs/self-hosted-runner.md`） |
 | `sudo -n true` の fail-closed 検証で失敗する | ジョブ実行ユーザーが passwordless sudo を持っている | runner のジョブユーザーを sudoers から外す |
 | `bwrap: No permissions to create a new namespace`（codex のみ） | unprivileged user namespace が禁止されている | seccomp / AppArmor プロファイルで userns 作成を許可する |

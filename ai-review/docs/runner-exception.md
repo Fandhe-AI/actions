@@ -25,6 +25,7 @@ provider（`grok` / クラウドの OpenAI 互換 endpoint）は GitHub ホス�
 | 条件 | 強制方法 |
 |---|---|
 | fork からの PR では review ジョブを実行しない | `github.event.pull_request.head.repo.full_name == github.repository` を `preflight` の `if` で判定（以降のジョブも連鎖的に起動しない） |
+| write 未満の主体（許可 bot を除く）が起こしたイベントでは実行しない | `preflight` の先頭で `github.actor` の権限を権限 API で判定し、write 以上でも許可 bot（既定 `dependabot[bot]`）でもなければ失敗（`collaborators-only`、既定有効。判定不能時も失敗） |
 | runner が未準備の間は実行しない | 資格情報（home-dir 用の Actions variable / secret `API_KEY`）が空なら job を skip（設定が唯一の有効化操作） |
 | ジョブユーザーが passwordless sudo を持たない（agentic のみ） | `sudo -n true` が通ったら `::error::` で即座に失敗 |
 | PR の内容がレビュー基準を書き換えない | prompt / schema / `AGENTS.md` 等を PR の checkout ではなく **base コミット**から読む |

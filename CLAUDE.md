@@ -32,7 +32,7 @@ Fandhe-AI Organization 向けの再利用可能な GitHub Composite Actions・re
 | `project-sync/` | Composite Action | Issue/PR の状態変更を GitHub Project (V2) の Status に自動同期 |
 | `submodule-update/` | Composite Action | git submodule を最新に追従させ、変更があれば PR を自動作成 |
 | `skills-update/` | Composite Action | `npx skills` 導入のエージェントスキルを最新に更新し、変更があれば PR を自動作成 |
-| `ai-review/` | Reusable workflow | 複数 AI provider（codex/claude/gemini/grok/OpenAI 互換 API）による PR 自動レビュー（provider 切替・複数モデル同時レビュー・runner/認証の provider ごと切替・2 段 fail-closed gate・多層防御。workflow 本体は `.github/workflows/ai-review.yml`） |
+| `ai-review/` | Reusable workflow | 複数 AI provider（codex/claude/gemini/grok/OpenAI 互換 API）による PR 自動レビュー（provider 切替・複数モデル同時レビュー・runner/認証の provider ごと切替・2 段 fail-closed gate・多層防御・既定で write 以上の actor（と dependabot）のみ実行。workflow 本体は `.github/workflows/ai-review.yml`） |
 | `codex-review/` | Reusable workflow | **凍結・後継 `ai-review/`**。OpenAI Codex CLI による PR 自動レビュー（codex-home 認証・2 段 fail-closed gate・多層防御。workflow 本体は `.github/workflows/codex-review.yml`） |
 | `rust-base-ci/` | Reusable workflow | Rust のベースライン品質ゲート（`fmt` / `clippy` / `test` / `deny` + fail-closed 集約ジョブ。runner は `runner-label` 入力で指定、`Cargo.toml` 不在時は success のまま skip。cache 有効時は incremental 抑止 + 保存前 workspace メンバー成果物 prune。workflow 本体は `.github/workflows/rust-base-ci.yml`） |
 | `pages-deploy/` | Reusable workflow | GitHub Pages への deploy（呼び出し側 build ジョブの dist を汎用 artifact で受け取り、Pages artifact 変換〜deploy まで共通側で実行。workflow 本体は `.github/workflows/pages-deploy.yml`） |

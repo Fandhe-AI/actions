@@ -34,7 +34,9 @@ name: AI PR review (reusable)
 #   書き換えられる wrapper の input からは受け取らない。サブスクリプション枠で動作）
 # - api-key: 呼び出し側が `secrets: API_KEY:` で渡す API キー（従量課金）
 # いずれの資格情報も未設定の間はレビュージョブを skip する（fail-closed な有効化スイッチ。
-# 設定が唯一の有効化操作）。fork からの PR では全ジョブを実行しない。
+# 設定が唯一の有効化操作）。fork からの PR では全ジョブを実行しない。また既定では、イベント
+# 発生者（github.actor）が write 以上の権限を持たない場合（許可 bot を除く）は preflight を
+# 失敗させ、レビューを実行しない（collaborators-only。fail-closed）。
 #
 # 資格情報・ファイルシステム・ネットワークに届く値（home-dir・API の送信先）は、PR が
 # 書き換えられる呼び出し側 wrapper の input だけでは決めない（home-dir は Actions variable
@@ -184,6 +186,22 @@ on:
         type: string
         required: false
         default: ""
+      collaborators-only:
+        description: >-
+          イベント発生者（github.actor）が対象リポジトリに write 以上（admin / maintain / write）
+          の権限を持つ場合、または allowed-bot-actors に一致する場合だけレビューする。満たさない
+          場合・判定不能時は preflight を失敗させる（fail-closed）。false で無効化
+        type: boolean
+        required: false
+        default: true
+      allowed-bot-actors:
+        description: >-
+          collaborators-only 有効時に権限によらず許可する bot の login（カンマ区切り、完全一致）。
+          各要素は "<name>[bot]" 形式でなければ fail-closed で拒否（人間のアカウントを許可
+          リストに入れさせない）。空で bot も権限判定に回す
+        type: string
+        required: false
+        default: "dependabot[bot]"
     secrets:
       API_KEY:
         description: >-
@@ -212,7 +230,8 @@ on:
       skip-reason:
         description: >-
           skip の理由（not-configured: 資格情報・base URL 未設定 / branch-prefix: skip 接頭辞に一致 /
-          空: skip していない、または fork PR で preflight 自体が起動していない）
+          空: skip していない、または fork PR で preflight 自体が起動していない、または actor 判定で
+          preflight が失敗した）
         value: ${{ jobs.preflight.outputs.skip-reason }}
 
 permissions:
@@ -222,6 +241,8 @@ jobs:
   # 入力の検証・既定値の解決・skip 判定・有効化（資格情報の有無）判定を行う。
   # 資格情報そのものには触れない（secret は「空かどうか」だけを見る）ため、
   # post_feedback と同じ runner を使う。fork PR では起動しない（後続も全て skip）。
+  # collaborators-only（既定有効）では、イベント発生者が write 未満（許可 bot を除く）の場合に
+  # 本ジョブを失敗させる（後続は skip。マージを止めるには本ジョブを required check にする）。
   # ここが失敗すると後続は実行されないが、本ジョブの失敗として check に現れる
   # （静かに消える fail-open にはならない）
   preflight:
@@ -242,6 +263,47 @@ jobs:
       home-dir: ${{ steps.decide.outputs.home-dir }}
       api-base-url: ${{ steps.decide.outputs.api-base-url }}
     steps:
+      # fork 除外だけでは、write 未満の org メンバーや bot が起こした same-repo PR（org 所有
+      # リポジトリでは write 無しでも既存ブランチ間の PR を作れる）を防げないため、イベント
+      # 発生者の権限を確認する。github.actor は最初のイベントを起こした主体で、re-run でも
+      # 変わらない（re-run による迂回経路は無い）。skip-branch-prefixes の green skip で
+      # 非該当 actor が通り抜けないよう decide より前に置く。資格情報の有効化判定よりも前の
+      # ため、資格情報が未設定でも非該当 actor では本ステップで赤になる。値は env 経由で受け、
+      # setFailed には固定文のみを渡す（workflow command 注入の防止）
+      - name: Verify actor permission
+        if: inputs.collaborators-only
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          ACTOR: ${{ github.actor }}
+          ALLOWED_BOTS: ${{ inputs.allowed-bot-actors }}
+        with:
+          script: |
+            const actor = process.env.ACTOR;
+            const bots = process.env.ALLOWED_BOTS.split(',').map(s => s.trim()).filter(Boolean);
+            const botRe = /^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/;
+            if (!bots.every(b => botRe.test(b))) {
+              core.setFailed('allowed-bot-actors は "<name>[bot]" 形式の login だけをカンマ区切りで指定してください（値は表示しません）');
+              return;
+            }
+            if (bots.includes(actor)) {
+              console.log(`actor is an allowed bot: ${actor}`);
+              return;
+            }
+            let permission = 'none';
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner, repo: context.repo.repo, username: actor,
+              });
+              permission = data.permission; // legacy 値: admin / write / read / none（maintain は write）
+            } catch (e) {
+              core.setFailed('actor の権限を判定できませんでした（fail-closed）');
+              return;
+            }
+            console.log(`actor permission: ${permission}`);
+            if (!['admin', 'write'].includes(permission)) {
+              core.setFailed('イベント発生者が write 以上の権限を持たないため、レビューを実行しません（collaborators-only）');
+            }
+
       - name: Resolve inputs and decide whether to review
         id: decide
         shell: bash
