@@ -14,7 +14,7 @@ Fandhe-AI Organization における GitHub Actions の runner 選択方針。
 | private | self-hosted runner |
 
 public 側で GitHub ホステッドを使う根拠として、fork からの PR で untrusted なコードを
-self-hosted runner 上で実行しないことが挙げられる（`.github/workflows/codex-review.yml`
+self-hosted runner 上で実行しないことが挙げられる（`.github/workflows/ai-review.yml`
 のコメント参照）。
 
 ### 記述例
@@ -64,7 +64,6 @@ jobs:
 
 `ai-review` の **agentic reviewer（codex / claude / gemini）・local LLM 向け review ジョブが
 使う self-hosted な sudo なし専用 runner** は、**public リポジトリでも許容される例外**とする。
-`codex-review`（凍結。互換のため残置）の codex 専用 runner も引き続きこの例外に含む。
 
 - 認証が home-dir 方式（runner 上に配置したログイン済みディレクトリ）であり、GitHub
   ホステッドでは資格情報を保持できないため。local LLM は LAN 内到達性が理由
@@ -85,13 +84,7 @@ jobs:
 この例外は ai-review の review ジョブ（`runner`、既定値は provider 名と同名ラベル）に限る。
 `preflight` / `post_feedback`（資格情報に触れない）は、呼び出し側の可視性に応じて
 **private なら `self-hosted`・public なら `ubuntu-latest` へ自動で切り替わる**（既定値の
-まま呼び出せば方針に合致し、codex-review と異なり明示指定は不要）。
-
-codex-review（凍結）を使い続けるリポジトリでは、引き続き `post-feedback-runner-label` の
-既定値が `self-hosted` のままのため、**public リポジトリから呼び出す場合は
-`post-feedback-runner-label: ubuntu-latest` を明示的に渡すこと**。この差分は wrapper
-テンプレートとして用意してある（[`codex-review/templates/`](../codex-review/templates/)。
-手順は [`codex-review/README.md`](../codex-review/README.md)「セットアップ」）。
+まま呼び出せば方針に合致し、明示指定は不要）。
 
 ## 4. 本リポジトリの reusable workflow との関係
 
@@ -100,7 +93,7 @@ codex-review（凍結）を使い続けるリポジトリでは、引き続き `
 
 | 呼び出し側 | 渡すラベル |
 |---|---|
-| public リポジトリ | `ubuntu-latest` を**明示的に指定**（`pages-deploy` の `runner-label`、codex-review の `post-feedback-runner-label` 等） |
+| public リポジトリ | `ubuntu-latest` を**明示的に指定**（`pages-deploy` の `runner-label` 等） |
 | private リポジトリ | `self-hosted`（または絞り込んだ独自ラベル）。既定値のままで方針に合致 |
 
 reusable workflow ごとの runner 既定値:
@@ -109,12 +102,10 @@ reusable workflow ごとの runner 既定値:
 |---|---|---|---|
 | `ai-review` | `runner`（review ジョブ） | agentic は provider 名と同名ラベル、API は private: `self-hosted` / public: `ubuntu-latest` | あり（API provider のみ） |
 | `ai-review` | `post-feedback-runner`（preflight/post_feedback） | private: `self-hosted` / public: `ubuntu-latest` | あり |
-| `codex-review`（凍結） | `runner-label` | `codex` | なし |
-| `codex-review`（凍結） | `post-feedback-runner-label` | `self-hosted` | なし（public は明示指定が必須） |
 | `pages-deploy` | `runner-label` | `self-hosted` | なし（public は明示指定が必須） |
 
-**注意**: `pages-deploy` の `runner-label` と `codex-review` の `post-feedback-runner-label` は
-いずれも既定値が `self-hosted` である（可視性での自動切替が無い）。既定値は private
+**注意**: `pages-deploy` の `runner-label` は
+既定値が `self-hosted` である（可視性での自動切替が無い）。既定値は private
 リポジトリを前提としているため、public リポジトリから呼び出す場合は方針に合わせてラベルを
 明示的に渡す必要がある。一方 `ai-review` の `preflight` / `post_feedback` は
 `github.event.repository.private` を見て既定値が自動切替するため、public リポジトリでも
@@ -154,6 +145,5 @@ jobs:
 
 - [`ai-review/docs/runner-exception.md`](../ai-review/docs/runner-exception.md)
 - [`ai-review/README.md`](../ai-review/README.md)
-- [`codex-review/README.md`](../codex-review/README.md)（凍結）
 - [`pages-deploy/README.md`](../pages-deploy/README.md)
 - [`rust-toolchain-setup/README.md`](../rust-toolchain-setup/README.md)

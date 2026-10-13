@@ -61,13 +61,13 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
   `write` 権限の追加・`GITHUB_TOKEN` で足りる箇所への PAT 要求・secrets の注入範囲拡大は
   根拠なしなら P0、根拠付きでも要精査（P1）
 - **fork PR・信頼境界（P0）**: `pull_request_target` 等 secrets が露出するトリガーの追加、
-  codex-review の fork PR 実行拒否・fail-closed 検証（sudo 不在検証・2 段 gate 等）の
+  ai-review の fork PR 実行拒否・fail-closed 検証（sudo 不在検証・2 段 gate 等）の
   弱体化は P0。レビュー制御ファイルを PR の checkout（改変可能側）から読む構成への
   後退（base 参照化の解除）も P0
 - **トークンの後始末（P0）**: remote URL・git config へトークンを埋め込む処理は
   `trap ... EXIT` で確実に復元する。トークンをログ（`echo` / `set -x`）へ出さない
 - **runner 方針の準拠（P1）**: `docs/runner-policy.md`（public = GitHub ホステッド /
-  private = self-hosted、codex-review の codex ジョブのみ self-hosted 例外）に反する
+  private = self-hosted、ai-review の review ジョブのみ self-hosted 例外）に反する
   runner 既定値・例外拡大は、方針文書の更新を伴わない限り P1
 
 ## 2. アーキテクチャ・設計整合の観点
@@ -106,7 +106,7 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
 
 ## リポジトリ固有の観点
 
-- **ai-review / codex-review の多層防御（P0）**: prompt / schema / AGENTS.md の base 参照
+- **ai-review の多層防御（P0）**: prompt / schema / AGENTS.md の base 参照
   抽出、`project_doc_max_bytes=0`（codex）等の自動読込無効化、`review_completed` の
   fail-closed 判定など、レビュー実行の自己参照攻撃対策を弱める変更はブロックする。
   ai-review 固有の多層防御を弱める変更も同様にブロック対象とする: 作業ツリー正規化
@@ -121,7 +121,7 @@ P0/P1 とする。受容記載そのものの妥当性への懸念も P2 で報�
   `skip-branch-prefixes`（旧 `skip-sync-pr-review`）が head branch 名の接頭辞のみで
   codex ジョブを skip する設計は、push できる主体が該当接頭辞のブランチで P0/P1 gate を
   回避できる残留リスクごとオーナー判断で受容済み
-  （`codex-review/README.md`「受容済み残留リスク」節、2026-08-18 判断・
+  （削除前の [`codex-review/README.md`](https://github.com/Fandhe-AI/actions/blob/0293b9a866d40d56e36a2758ef55cbfe816dfb55/codex-review/README.md)「受容済み残留リスク」節、2026-08-18 判断・
   2026-08-21 追記で変更ファイル集合の実測検証の撤去まで受容範囲を拡張）。
   ai-review の同名入力（`preflight` ジョブでの同じ接頭辞のみ判定。複数モデル構成の集約
   gate が全 reviewer の `skip-reason: branch-prefix` を明示的に受け取った場合に限り

@@ -143,5 +143,3 @@ GEMINI_CLI_HOME=<dir> gemini /auth        # または CLI の対応するステ�
 
 - [`../README.md`](../README.md) — provider 一覧・セットアップ・Inputs
 - [`runner-exception.md`](runner-exception.md) — public リポジトリでの runner 例外
-- [`../../codex-review/README.md`](../../codex-review/README.md) — codex-review（凍結）の
-  従来の runner 構築手順
