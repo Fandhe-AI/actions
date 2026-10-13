@@ -305,7 +305,8 @@ quota を消費するうえ上流由来の P0/P1 で auto-merge が止まるだ�
 受容する設計は次のとおり（codex-review の `skip-branch-prefixes` と同じ接頭辞のみ判定）:
 
 - 入力 `skip-branch-prefixes`（カンマ区切り、各要素は前後の空白を除去、既定は空）。
-  `preflight` ジョブが入力検証の後・資格情報の有効化判定の前に、
+  `preflight` ジョブが入力検証の後・資格情報の有効化判定の前に（actor 判定 `collaborators-only` は
+  さらにその前に行う）、
   `github.event.pull_request.head.ref` を各接頭辞とリテラルの前方一致で比較する
   （`*` / `?` をパターンとして解釈しない）
 - 一致した場合は `review` / `post_feedback` を実行せず、output `skip-reason` を
@@ -350,7 +351,6 @@ review ジョブが write 権限の無いイベント発生者で動くのを防
   （head のコミットは write 保持者が push したもので、影響は主に quota）。イベント発生者が write 未満なら実行しない
 - 判定は権限 API の legacy `permission` が `admin` / `write` のときだけ通す（maintain は write に写るため通る。
   triage・read ベースの custom role は拒否）
-
 - マージを止めるには、`<job> / preflight` を required status check に登録する必要がある。
   失敗時の `review` / `post_feedback` は skipped で、skipped は required check を満たすため、
   preflight を required にしない構成ではマージは止まらない
@@ -360,8 +360,8 @@ review ジョブが write 権限の無いイベント発生者で動くのを防
 - `dependabot[bot]` を既定で許可する理由: Dependabot のコマンド（`@dependabot recreate` 等）は
   write 権限が無いと実行できず、`dependabot[bot]` のイベントを任意に起こせるのは実質 collaborator と
   Dependabot 自身の定期実行に限られる。許可しないと依存更新 PR のレビューが失われるため
-- `github.actor` は最初にイベントを起こしたユーザーで、re-run しても変わらない（collaborator が
-  re-run しても判定は通らない）。write 以上の collaborator が追加 push するか close→reopen して
+- `github.actor` は最初にイベントを起こしたユーザーで、re-run しても変わらない（write 未満の actor が
+  起こしたイベントは、collaborator が re-run しても通らない）。write 以上の collaborator が追加 push するか close→reopen して
   再判定させる
 - `collaborators-only: false` / `allowed-bot-actors` の変更は wrapper で明示した場合だけ有効になる
   （wrapper を書き換えられる主体は元々 run ステップを足せるため、境界の後退にはならない）
