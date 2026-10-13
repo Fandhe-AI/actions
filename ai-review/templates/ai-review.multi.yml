@@ -194,7 +194,7 @@ jobs:
             if [ "${reason}" = branch-prefix ]; then prefix_skipped=$((prefix_skipped + 1)); fi
           done
           if [ "${failed}" -gt 0 ]; then
-            echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー。各ジョブと PR レビューを参照）"
+            echo "::error::失敗した reviewer が ${failed} 件あります（ブロック対象の指摘・レビュー未完了・実行エラー・非 collaborator による起動（preflight 失敗）。各ジョブと PR レビューを参照）"
             exit 1
           fi
           if [ "${reviewed}" -eq 0 ] && [ "${prefix_skipped}" -eq "${total}" ]; then
@@ -202,7 +202,7 @@ jobs:
             exit 0
           fi
           if [ "${reviewed}" -lt "${MIN_REVIEWERS}" ]; then
-            echo "::error::実際にレビューした reviewer が ${reviewed} 件で、MIN_REVIEWERS（${MIN_REVIEWERS}）に届きません（資格情報の設定漏れ・fork PR・非 collaborator による起動等で全 reviewer が skip された）"
+            echo "::error::実際にレビューした reviewer が ${reviewed} 件で、MIN_REVIEWERS（${MIN_REVIEWERS}）に届きません（資格情報の設定漏れ・fork PR 等で全 reviewer が skip された）"
             exit 1
           fi
           echo "集約 gate 通過（レビュー実行 ${reviewed} 件・失敗 0 件）"

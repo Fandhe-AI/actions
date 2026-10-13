@@ -249,7 +249,7 @@ required にする運用のどちらかを選ぶ。
 | `blocking-count` | ブロック対象 priority の指摘件数（gate 未到達・skip 時は空） |
 | `reviewer-id` | 解決済みの reviewer-id |
 | `reviewed` | レビューが実行され結果が出たか（`"true"` / `"false"`） |
-| `skip-reason` | skip の理由（`not-configured` / `branch-prefix` / 空） |
+| `skip-reason` | skip の理由（`not-configured` / `branch-prefix` / 空。空は skip していない場合のほか、fork PR で `preflight` が起動しない場合・actor 判定で `preflight` が失敗した場合を含む） |
 
 ## 参照バージョン（`@latest`）
 
@@ -342,8 +342,14 @@ fail-open 化・fork PR への拡大・接頭辞以外の条件（actor・ラベ
 
 org 所有の public リポジトリでは、org メンバーは head ブランチへの write 権限が無くても PR を
 作成できる（base permission が `read` でも same-repo PR が成立する）。資格情報・quota を使う
-review ジョブが write 権限の無い主体の PR で動くのを防ぐため、`preflight` の先頭で
+review ジョブが write 権限の無いイベント発生者で動くのを防ぐため、`preflight` の先頭で
 `github.actor` の権限を権限 API で確認し、write 以上でなければ**失敗**させる（skip ではない）。
+
+- 判定単位は PR 作成者ではなくイベント発生者（`github.actor`）である。write 未満のユーザーが作った PR でも、
+  collaborator の push / close→reopen / Update branch で actor が collaborator になれば review は実行される
+  （head のコミットは write 保持者が push したもので、影響は主に quota）。イベント発生者が write 未満なら実行しない
+- 判定は権限 API の legacy `permission` が `admin` / `write` のときだけ通す（maintain は write に写るため通る。
+  triage・read ベースの custom role は拒否）
 
 - マージを止めるには、`<job> / preflight` を required status check に登録する必要がある。
   失敗時の `review` / `post_feedback` は skipped で、skipped は required check を満たすため、
@@ -375,7 +381,7 @@ review ジョブが write 権限の無い主体の PR で動くのを防ぐた�
 
 | 症状 | 原因 | 対処 |
 |---|---|---|
-| review ジョブが `skipped`（PR コメントも出ない） | 資格情報未設定、または fork からの PR | 「セットアップ」3 で variable/secret を設定する。fork PR は仕様上実行しない |
+| review ジョブが `skipped`（PR コメントも出ない） | 資格情報未設定、または fork からの PR。`preflight` 失敗による連鎖 skip（actor 判定等）の場合は次行を参照 | 「セットアップ」3 で variable/secret を設定する。fork PR は仕様上実行しない |
 | `preflight` が「write 以上の権限を持たない」で失敗 | write 未満のユーザー、または `allowed-bot-actors` にない bot が起こしたイベント | write 以上の collaborator が追加 push するか close→reopen する（re-run では actor が変わらず通らない）。bot を恒常的に許可するなら `allowed-bot-actors` に追加する |
 | ジョブが `Waiting for a runner` のまま進まない | runner が未登録・runner group 未許可、または既定の用途ラベル（`codex` / `claude` / `gemini`）を持つ runner が無い | runner group 設定を確認し、runner にラベルを追加するか `runner` 入力で既存ラベルを指定する（`docs/self-hosted-runner.md`） |
 | `sudo -n true` の fail-closed 検証で失敗する | ジョブ実行ユーザーが passwordless sudo を持っている | runner のジョブユーザーを sudoers から外す |

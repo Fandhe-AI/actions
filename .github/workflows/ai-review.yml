@@ -277,8 +277,14 @@ jobs:
           ACTOR: ${{ github.actor }}
           ALLOWED_BOTS: ${{ inputs.allowed-bot-actors }}
         with:
+          # API の一時障害（5xx 等）で正当な collaborator のイベントを赤にしにくくする（4xx は再試行されない）
+          retries: 3
           script: |
             const actor = process.env.ACTOR;
+            if (!actor) {
+              core.setFailed('actor を特定できませんでした（fail-closed）');
+              return;
+            }
             const bots = process.env.ALLOWED_BOTS.split(',').map(s => s.trim()).filter(Boolean);
             const botRe = /^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/;
             if (!bots.every(b => botRe.test(b))) {
@@ -296,6 +302,10 @@ jobs:
               });
               permission = data.permission; // legacy 値: admin / write / read / none（maintain は write）
             } catch (e) {
+              core.setFailed('actor の権限を判定できませんでした（fail-closed）');
+              return;
+            }
+            if (typeof permission !== 'string') {
               core.setFailed('actor の権限を判定できませんでした（fail-closed）');
               return;
             }
