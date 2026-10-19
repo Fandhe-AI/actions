@@ -199,6 +199,12 @@ gh api repos/reviewdog/action-setup/git/tags/<tag-object-sha> --jq '.object.sha'
 - reviewdog はステップ最後のコマンドとして実行し、終了コードを伝播させる
   （`|| true` で握り潰さないため、403 等の報告失敗がパスに見えることはない）
 - reviewdog 無効時は linter の終了コードがそのままジョブの成否になる
+- **巨大 PR（diff が 300 ファイル超で GitHub API が 406 を返す PR）でも reviewdog が失敗しない。**
+  reviewdog は git CLI へフォールバックして merge-base と PR head を `git fetch` するが、
+  checkout は `persist-credentials: false` で資格情報を残さないため fetch が認証エラーになる。
+  そこで `reviewdog: true` の PR では checkout の `fetch-depth` を「PR のコミット数 + 2」にして
+  必要なコミットを手元に揃え、reviewdog には `REVIEWDOG_SKIP_GIT_FETCH=true` を渡して fetch を省く
+  （資格情報を後続ステップに渡さない。それ以外のイベント・`reviewdog: false` は従来どおり depth 1）
 - **linter 自体の実行失敗（設定ファイル不正・引数誤り等）は fail-open させない。**
   markdownlint-cli は「違反検出」も「設定ファイル不正」も同じ終了コード `1` を返すため、
   `reviewdog-fail-level: none` と組み合わせると「何も報告されないまま緑」になりうる。
