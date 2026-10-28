@@ -42,11 +42,12 @@ name: Rust base CI (reusable)
 #   抑止のみ）の実 CI 計測では blob 縮小への寄与は確認できなかった（#131 の生 du 値ベースの
 #   推定では約 9.6% だったが実測とは一致せず）。blob の縮小は下記の保存前 prune（v3）に
 #   依存する（計測: rust-base-ci/cache-before-after-2026-09-17.md、イシュー #134）。
-# - cache 有効時は cargo 実行ステップ直後・actions/cache の保存（post）より前に workspace
-#   メンバー成果物を prune する。メンバー crate の成果物はソース変更のたびに必ず再ビルドされ
-#   キャッシュ価値がないため（#131 計測で target/debug/deps が全体の約 81.5%、うち大半は
-#   統合テスト・ベンチバイナリ。イシュー #133）。依存 crate の成果物（deps/ の依存側 rlib・
-#   ~/.cargo）は残す
+# - cache を保存する run では cargo 実行ステップ直後・actions/cache の保存より前に workspace
+#   メンバー成果物を prune する（保存しない run では prune も省く。判定は保存ステップと
+#   共有する cache-save-decision ステップの出力）。メンバー crate の成果物はソース変更の
+#   たびに必ず再ビルドされキャッシュ価値がないため（#131 計測で target/debug/deps が
+#   全体の約 81.5%、うち大半は統合テスト・ベンチバイナリ。イシュー #133）。依存 crate の
+#   成果物（deps/ の依存側 rlib・~/.cargo）は残す
 #   あわせてキーへ版セグメント `v3` を追加した（#132 で導入した `v2` からの bump。現行は下記の
 #   rustc の版を含む `v4`）。
 #   既存キーへの exact hit では actions/cache が保存をスキップし縮小版が永久に保存されない
@@ -300,14 +301,36 @@ jobs:
           set -euo pipefail
           cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: workspace メンバー成果物を prune（cache 保存前・cache 有効時のみ）
+      # 保存するかの判定。下の prune と Save cargo cache はこの出力だけを条件にし、判定を
+      # 2 か所に書かない。`cache-save: false`（PR で restore のみ）と primary key への
+      # exact hit では保存しないため save=false になる。cache 無効・Cargo.toml 不在・前段の
+      # 失敗ではこのステップ自体が skip され、出力が空のため prune・保存も skip される
+      - name: cache を保存するか判定
+        id: cache-save-decision
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        env:
+          SAVE: ${{ inputs.cache-save && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          if [ "${SAVE}" = "true" ]; then
+            echo "save=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "save=false" >> "${GITHUB_OUTPUT}"
+            echo "cache を保存しない run のため、保存前 prune と保存をスキップします"
+          fi
+
+      - name: workspace メンバー成果物を prune（cache を保存する run のみ）
         # 保存（下の Save cargo cache）はこの後に走るため、ここで削除した分は
         # 保存対象から外れる。メンバー crate の成果物はソース変更で必ず再ビルドされるため
         # キャッシュ価値がなく、blob を肥大化させる主因だった（#131 計測・#133）。
         # 依存 crate の成果物（deps/ の依存側 rlib・~/.cargo）は残す。
-        # if: always() は付けない（cargo 失敗時は保存ステップも既定の success() 条件で
+        # prune の目的は保存する blob の縮小だけで、後続に prune 後の target を使うステップは
+        # 無い。そのため保存しない run（PR の restore のみ・exact hit）では実行しない
+        # （保存の判定は上の cache-save-decision と共有する）。
+        # if: always() は付けない（cargo 失敗時は判定ステップも既定の success() 条件で
         # skip され保存しないため、prune を実行する必要がない）。
-        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        if: steps.cache-save-decision.outputs.save == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -437,10 +460,11 @@ jobs:
           echo "prune 完了: ${removed} エントリを削除しました"
           echo "対象 package: ${pkgs[*]}"
 
-      # 保存は restore と同じ path・primary key で行う。exact hit（cache-hit == 'true'）では
-      # 内容が同じため保存しない。条件に status 関数を含めないので、前段の失敗時は保存しない
+      # 保存は restore と同じ path・primary key で行う。`cache-save` と exact hit
+      # （cache-hit == 'true'。内容が同じため保存しない）の判定は cache-save-decision に
+      # まとめ、prune と共有する。条件に status 関数を含めないので、前段の失敗時は保存しない
       - name: Save cargo cache
-        if: inputs.cache && inputs.cache-save && steps.detect.outputs.has_cargo == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
+        if: steps.cache-save-decision.outputs.save == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -542,14 +566,36 @@ jobs:
           set -euo pipefail
           cargo test --workspace --all-features
 
-      - name: workspace メンバー成果物を prune（cache 保存前・cache 有効時のみ）
+      # 保存するかの判定。下の prune と Save cargo cache はこの出力だけを条件にし、判定を
+      # 2 か所に書かない。`cache-save: false`（PR で restore のみ）と primary key への
+      # exact hit では保存しないため save=false になる。cache 無効・Cargo.toml 不在・前段の
+      # 失敗ではこのステップ自体が skip され、出力が空のため prune・保存も skip される
+      - name: cache を保存するか判定
+        id: cache-save-decision
+        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        shell: bash
+        env:
+          SAVE: ${{ inputs.cache-save && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          if [ "${SAVE}" = "true" ]; then
+            echo "save=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "save=false" >> "${GITHUB_OUTPUT}"
+            echo "cache を保存しない run のため、保存前 prune と保存をスキップします"
+          fi
+
+      - name: workspace メンバー成果物を prune（cache を保存する run のみ）
         # 保存（下の Save cargo cache）はこの後に走るため、ここで削除した分は
         # 保存対象から外れる。メンバー crate の成果物はソース変更で必ず再ビルドされるため
         # キャッシュ価値がなく、blob を肥大化させる主因だった（#131 計測・#133）。
         # 依存 crate の成果物（deps/ の依存側 rlib・~/.cargo）は残す。
-        # if: always() は付けない（cargo 失敗時は保存ステップも既定の success() 条件で
+        # prune の目的は保存する blob の縮小だけで、後続に prune 後の target を使うステップは
+        # 無い。そのため保存しない run（PR の restore のみ・exact hit）では実行しない
+        # （保存の判定は上の cache-save-decision と共有する）。
+        # if: always() は付けない（cargo 失敗時は判定ステップも既定の success() 条件で
         # skip され保存しないため、prune を実行する必要がない）。
-        if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
+        if: steps.cache-save-decision.outputs.save == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -679,10 +725,11 @@ jobs:
           echo "prune 完了: ${removed} エントリを削除しました"
           echo "対象 package: ${pkgs[*]}"
 
-      # 保存は restore と同じ path・primary key で行う。exact hit（cache-hit == 'true'）では
-      # 内容が同じため保存しない。条件に status 関数を含めないので、前段の失敗時は保存しない
+      # 保存は restore と同じ path・primary key で行う。`cache-save` と exact hit
+      # （cache-hit == 'true'。内容が同じため保存しない）の判定は cache-save-decision に
+      # まとめ、prune と共有する。条件に status 関数を含めないので、前段の失敗時は保存しない
       - name: Save cargo cache
-        if: inputs.cache && inputs.cache-save && steps.detect.outputs.has_cargo == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
+        if: steps.cache-save-decision.outputs.save == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

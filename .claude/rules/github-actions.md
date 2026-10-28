@@ -61,6 +61,9 @@ restore-keys は同じ rustc の `v4-` を優先し、移行期間だけ `v3-` �
   `gh cache delete` による削除を案内する
 - restore と save は同じ `path` と primary key（`steps.<id>.outputs.cache-primary-key`）を使い、save は前段の成功と
   `steps.<id>.outputs.cache-hit != 'true'` を条件にする（`actions/cache` の post 保存と同じ条件）。`cache-save` の条件も外さない
+  - `rust-base-ci.yml` の `clippy` / `test` は、`cache-save` と exact hit の判定を `cache-save-decision` ステップに
+    まとめ、保存前 prune と save がその出力を共有する。保存の前処理（prune 等）を足すときも判定を複製せず同じ出力を使い、
+    保存しない run（PR の restore のみ・exact hit）で前処理を走らせない
 - key の変更は `rust-base-ci.yml` のコメントと `rust-base-ci/README.md` の「cache の構成」節を同じ PR で更新する
 
 ## キャッシュを新しく足すとき

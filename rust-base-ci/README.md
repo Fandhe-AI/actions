@@ -21,9 +21,10 @@ Rust リポジトリのベースライン品質ゲート（`cargo fmt` / `cargo 
 - cache はオプトイン（`cache: true`）。workspace が永続する self-hosted runner では
   通常不要なため既定は無効。対象は `clippy` / `test` / `deny` ジョブで、`fmt` ジョブは
   cache を持たない。有効時、`clippy` / `test` ジョブは `CARGO_INCREMENTAL=0` を
-  設定し incremental 成果物をそもそも生成しない。さらに cargo 実行ステップ直後・
-  cache 保存前に workspace メンバー成果物を prune する（詳細は「cache の構成」節）。
-  保存は `cache-save` 入力で止められ、main だけで保存して PR は restore のみにできる
+  設定し incremental 成果物をそもそも生成しない。さらに cache を保存する run では
+  cargo 実行ステップ直後・cache 保存前に workspace メンバー成果物を prune する
+  （詳細は「cache の構成」節）。保存は `cache-save` 入力で止められ、main だけで保存して
+  PR は restore のみにできる（保存しない run では prune も省く）
 
 ## ジョブ構成
 
@@ -148,7 +149,7 @@ with:
 | `runner-label` | - | `self-hosted` | 全ジョブを実行する runner ラベル（public は `ubuntu-latest` 等） |
 | `deny-checks` | - | `advisories licenses sources` | `cargo deny check` に渡すチェック名（空白区切り）。`advisories` / `bans` / `licenses` / `sources` のみ許容し、それ以外は fail-closed で拒否 |
 | `cargo-deny-version` | - | `0.20.2` | `cargo-deny` の固定バージョン（インストール後に厳密一致で検証する） |
-| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン。`clippy` / `test` / `deny` が対象で、`fmt` は cache を持たない）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、保存前に workspace メンバー成果物を prune する（キー版セグメント `v4`。key に rustc の版を含み、移行期間は `v3` へフォールバックする。「cache の構成」節参照） |
+| `cache` | - | `false` | cargo レジストリ・`target` の cache を有効にする（オプトイン。`clippy` / `test` / `deny` が対象で、`fmt` は cache を持たない）。有効時、`clippy` / `test` は `CARGO_INCREMENTAL=0` を設定し incremental 成果物を生成せず、cache を保存する run では保存前に workspace メンバー成果物を prune する（キー版セグメント `v4`。key に rustc の版を含み、移行期間は `v3` へフォールバックする。「cache の構成」節参照） |
 | `cache-key-prefix` | - | `rust-base-ci` | cache key の接頭辞（runner 共有時の衝突回避用） |
 | `cache-save` | - | `true` | `cache: true` のとき cache を保存するか（`false` で restore のみ）。main だけで保存する場合は `${{ github.ref == 'refs/heads/main' }}` を渡す（「cache の構成」節参照） |
 | `fmt-timeout-minutes` | - | `10` | `fmt` ジョブの timeout（分） |
@@ -190,7 +191,9 @@ stable 追従の呼び出し側では runner イメージの更新で rustc が�
 restore は `actions/cache/restore`、保存は `actions/cache/save` に分けている。保存ステップは
 cargo 実行（`clippy` / `test` では保存前 prune）の後ろに置き、前段が失敗したときと primary key に
 exact hit したときは保存しない（`actions/cache` の post 保存と同じ条件）。`cache-save: false` の
-ときは保存ステップが skip され、restore だけを行う。
+ときは保存ステップが skip され、restore だけを行う。`clippy` / `test` では保存するかを
+`cache-save-decision` ステップで 1 回だけ判定し、保存前 prune と保存ステップがその出力を共有する
+（保存しない run では prune も実行しない）。
 
 ### 保存を main に限る（`cache-save`）
 
@@ -258,8 +261,9 @@ v2 は全指標で v1 より後退している。v3 の非後退判定は保留�
 
 ### 保存前 prune（`clippy` / `test`）
 
-`cache: true` のとき、`clippy` / `test` ジョブは `cargo clippy` / `cargo test`
-実行直後・`actions/cache` の保存（post）より前に、workspace メンバーの成果物を
+`cache: true` で cache を保存する run（`cache-save` が真で、primary key に exact hit して
+いない run）のとき、`clippy` / `test` ジョブは `cargo clippy` / `cargo test`
+実行直後・`actions/cache` の保存より前に、workspace メンバーの成果物を
 `target/debug`（および `.cargo/config.toml` の `build.target` 指定時に生成される
 `target/<triple>/debug`）から削除する（イシュー #133）。メンバー crate の成果物はソースが
 変わるたびに必ず再ビルドされるためキャッシュに含める価値がなく、`target/debug/deps`
