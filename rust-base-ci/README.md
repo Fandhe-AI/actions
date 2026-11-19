@@ -271,7 +271,9 @@ v2 は全指標で v1 より後退している。v3 の非後退判定は保留�
 
 - **削除する**: `target/debug`（および `build.target` 指定時の `target/<triple>/debug`）
   配下の `examples/`・`incremental/`、`.fingerprint/<member>-<16hex>`・
-  `build/<member>-<16hex>`（package 名でアンカー）、`deps/` 配下の
+  `build/<member>-<16hex>`（package 名でアンカー）、Rust 1.100 以降の build-dir が作る
+  `build/<member>/`（`<member>/<hash>/` の下に成果物が入り、`deps/`・`.fingerprint/` は
+  作られない。member 名のディレクトリごと削除する）、`deps/` 配下の
   `(lib)?<member|target名（`_`正規化）>-<16hex>(.拡張子)?`、直下の uplift された成果物
   （`(lib)?<member|target名>(.d|.rlib|.rmeta|.so|.a|.dylib)?` に一致するもの。lib crate の
   `libfoo.rlib` 等も対象に含む）。いずれも各 profile ディレクトリ配下のみが対象
