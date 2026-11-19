@@ -49,13 +49,15 @@ name: Rust base CI (reusable)
 #   全体の約 81.5%、うち大半は統合テスト・ベンチバイナリ。イシュー #133）。依存 crate の
 #   成果物（deps/ の依存側 rlib・~/.cargo）は残す
 #   あわせてキーへ版セグメント `v3` を追加した（#132 で導入した `v2` からの bump。現行は下記の
-#   rustc の版を含む `v4`）。
+#   rustc の版を含む `v5`）。
 #   既存キーへの exact hit では actions/cache が保存をスキップし縮小版が永久に保存されない
 #   ため、新キー空間へ切り替える必要があった。当時の restore-keys は `v3` に加えて `v2` へも
 #   フォールバックしていた: v2 blob は incremental を含まず（#132 で生成自体を抑止済み）、
 #   prune は保存前に走るため、v2 を復元してビルド・prune した上で v3 として保存しても
 #   縮小の意味は損なわれない（v2→v3 は cold run を挟まずに移行できる）。v2 の
-#   restore-keys 行は v4 への切り替えで削除した。版を bump する場合は
+#   restore-keys 行は v4 への切り替えで削除した。v4 → v5 は Rust 1.100 の build-dir 対応で prune
+#   条件を変えたため、旧 prune 条件の blob を復元しないよう v4 / v3 の行を両方削除した。
+#   版を bump する場合は
 #   clippy / test 両ジョブを同時に更新する
 # - cache は actions/cache/restore と actions/cache/save に分けて使い、保存は `cache-save`
 #   入力（既定 true）で止められる。呼び出し側が `cache-save: ${{ github.ref == 'refs/heads/main' }}`
@@ -68,8 +70,8 @@ name: Rust base CI (reusable)
 #   actions/cache の post 保存と同じに保つ
 # - cache key のハッシュはルートの Cargo.lock だけを入力にする（`**/Cargo.lock` だと
 #   workspace 外のサンプル・治具の Cargo.lock の変更でもキーが変わり、同内容の blob が増える）
-# - clippy / test の key には rustc の版（`rustc -vV` の release・commit-hash）も入れる（版セグメント `v4`。v3 へは移行期間
-#   だけフォールバックする）。rust-toolchain.toml が stable 追従だと runner イメージの更新で rustc が
+# - clippy / test の key には rustc の版（`rustc -vV` の release・commit-hash）も入れる（版セグメント `v5`。旧版へは
+#   フォールバックしない）。rust-toolchain.toml が stable 追従だと runner イメージの更新で rustc が
 #   変わり、key に rustc が無いと旧 rustc の target に exact hit し続けて依存を毎回全再ビルドし、
 #   exact hit のため保存もされない。toolchain の取得を cache の restore より前に移した
 # - deny ジョブは cargo-deny のバイナリ（~/.cargo/bin/cargo-deny）を OS・アーキテクチャ・
@@ -274,11 +276,12 @@ jobs:
           echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore cargo cache
-        # キーの `v4` は rustc の版（上のステップ）を key に入れた空間への切り替えセグメント。
-        # restore-keys は同じ rustc の `v4` を優先し、移行期間だけ `v3`（rustc を含まない旧 key。
-        # 保存前 prune 済み・#133）にもフォールバックする（cold run を挟まない移行）。`v3` 行は
-        # `v3` blob が evict（7 日）された後に削除してよい。`v3` の blob が別の rustc のものだった
-        # 場合は依存が再ビルドされるが、新しい `v4` の key で保存し直されるため 1 回で収まる。
+        # キーの `v5` は rustc の版（上のステップ）を key に入れ、prune が Rust 1.100 の
+        # build/<pkg>/ も消す空間への切り替えセグメント。v4 の exact hit では保存前 prune も
+        # 保存も走らず、旧 prune 条件で残った build/<member>/ が rustc か Cargo.lock が変わる
+        # まで居座るため、版を上げて作り直させる。restore-keys は同じ rustc の `v5` だけを
+        # 前方一致で拾い、`v4` / `v3` へはフォールバックしない（旧 prune 条件の blob を
+        # 復元しないため。対象ジョブは bump 後の最初の run が 1 回だけ cold になる）。
         # 版を bump する場合は clippy / test 両ジョブを同時に更新する
         id: cargo-cache
         if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
@@ -289,10 +292,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v4-${{ steps.rustc.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v5-${{ steps.rustc.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v4-${{ steps.rustc.outputs.hash }}-
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v3-
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-clippy-v5-${{ steps.rustc.outputs.hash }}-
 
       - name: cargo clippy --workspace --all-targets --all-features
         if: steps.detect.outputs.has_cargo == 'true'
@@ -386,7 +388,10 @@ jobs:
 
           alt_pkgs="$(IFS='|'; printf '%s' "${pkgs[*]}")"
           alt_names="$(IFS='|'; printf '%s' "${names[*]}")"
-          re_unit="^(${alt_pkgs})-[0-9a-f]{16}$"                 # .fingerprint/ build/（package 名・ハイフンのまま）
+          # .fingerprint/ build/（package 名・ハイフンのまま）。Cargo 1.99 以前の `<pkg>-<hash>` と、
+          # 1.100 以降の build-dir（`build/<pkg>/<hash>/`。deps/・.fingerprint/ は作られない）の
+          # `<pkg>` ディレクトリ（全 hash を含む）の両方に一致させる。ハッシュ付きの照合は従来どおり
+          re_unit="^(${alt_pkgs})(-[0-9a-f]{16})?$"
           re_dep="^(lib)?(${alt_names})-[0-9a-f]{16}(\..+)?$"    # deps/（target 名・`_` 正規化）
           re_top="^(lib)?(${alt_names})(\.(d|rlib|rmeta|so|a|dylib))?$"  # <profile> 直下の uplift バイナリ（lib prefix・rlib 等の拡張子込み）
 
@@ -539,11 +544,12 @@ jobs:
           echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore cargo cache
-        # キーの `v4` は rustc の版（上のステップ）を key に入れた空間への切り替えセグメント。
-        # restore-keys は同じ rustc の `v4` を優先し、移行期間だけ `v3`（rustc を含まない旧 key。
-        # 保存前 prune 済み・#133）にもフォールバックする（cold run を挟まない移行）。`v3` 行は
-        # `v3` blob が evict（7 日）された後に削除してよい。`v3` の blob が別の rustc のものだった
-        # 場合は依存が再ビルドされるが、新しい `v4` の key で保存し直されるため 1 回で収まる。
+        # キーの `v5` は rustc の版（上のステップ）を key に入れ、prune が Rust 1.100 の
+        # build/<pkg>/ も消す空間への切り替えセグメント。v4 の exact hit では保存前 prune も
+        # 保存も走らず、旧 prune 条件で残った build/<member>/ が rustc か Cargo.lock が変わる
+        # まで居座るため、版を上げて作り直させる。restore-keys は同じ rustc の `v5` だけを
+        # 前方一致で拾い、`v4` / `v3` へはフォールバックしない（旧 prune 条件の blob を
+        # 復元しないため。対象ジョブは bump 後の最初の run が 1 回だけ cold になる）。
         # 版を bump する場合は clippy / test 両ジョブを同時に更新する
         id: cargo-cache
         if: inputs.cache && steps.detect.outputs.has_cargo == 'true'
@@ -554,10 +560,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v4-${{ steps.rustc.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v5-${{ steps.rustc.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v4-${{ steps.rustc.outputs.hash }}-
-            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v3-
+            ${{ inputs.cache-key-prefix }}-${{ runner.os }}-test-v5-${{ steps.rustc.outputs.hash }}-
 
       - name: cargo test --workspace --all-features
         if: steps.detect.outputs.has_cargo == 'true'
@@ -651,7 +656,10 @@ jobs:
 
           alt_pkgs="$(IFS='|'; printf '%s' "${pkgs[*]}")"
           alt_names="$(IFS='|'; printf '%s' "${names[*]}")"
-          re_unit="^(${alt_pkgs})-[0-9a-f]{16}$"                 # .fingerprint/ build/（package 名・ハイフンのまま）
+          # .fingerprint/ build/（package 名・ハイフンのまま）。Cargo 1.99 以前の `<pkg>-<hash>` と、
+          # 1.100 以降の build-dir（`build/<pkg>/<hash>/`。deps/・.fingerprint/ は作られない）の
+          # `<pkg>` ディレクトリ（全 hash を含む）の両方に一致させる。ハッシュ付きの照合は従来どおり
+          re_unit="^(${alt_pkgs})(-[0-9a-f]{16})?$"
           re_dep="^(lib)?(${alt_names})-[0-9a-f]{16}(\..+)?$"    # deps/（target 名・`_` 正規化）
           re_top="^(lib)?(${alt_names})(\.(d|rlib|rmeta|so|a|dylib))?$"  # <profile> 直下の uplift バイナリ（lib prefix・rlib 等の拡張子込み）
 
